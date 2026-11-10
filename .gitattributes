@@ -1,0 +1,18 @@
+# Normalise text in the repository and let the checkout decide, except where
+# the file's consumer does not tolerate CRLF.
+* text=auto
+
+# scripts/ is executed by bash -- every make target delegates to one. A CRLF
+# checkout on Windows makes bash read the trailing \r as part of the command
+# and fail with "$'\r': command not found", so these stay LF everywhere.
+*.sh text eol=lf
+
+# Loaded into Redis as a Lua script and hashed for EVALSHA; the bytes must not
+# vary by platform.
+*.lua text eol=lf
+
+# Read by docker build on Linux.
+Dockerfile text eol=lf
+
+# A recipe line is passed to the shell as-is.
+Makefile text eol=lf

@@ -1,0 +1,17 @@
+/bin/
+/gateway
+/gateway.exe
+
+.env
+.env.local
+# Backups written by scripts/env-init.sh; they hold the previous secrets.
+.env.backup.*
+.env.tmp.*
+
+*.test
+*.out
+coverage.*
+
+.DS_Store
+.idea/
+.vscode/
