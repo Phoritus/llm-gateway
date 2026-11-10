@@ -1,0 +1,161 @@
+package auth
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestBuildMessageWritesHeadersAndBody(t *testing.T) {
+	body, err := buildMessage("no-reply@example.com", Message{
+		To:      "user@example.org",
+		Subject: "Confirm your email address",
+		Body:    "Use this link:\n\nhttps://gateway.example.com/api/auth/verify-email?token=abc\n",
+	})
+	if err != nil {
+		t.Fatalf("buildMessage() = %v, want no error", err)
+	}
+
+	got := string(body)
+	for _, want := range []string{
+		"From: no-reply@example.com\r\n",
+		"To: user@example.org\r\n",
+		"Subject: Confirm your email address\r\n",
+		"MIME-Version: 1.0\r\n",
+		`Content-Type: text/plain; charset="utf-8"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message is missing %q:\n%s", want, got)
+		}
+	}
+
+	// Exactly one blank line separates the headers from the body; without it
+	// the first body line is parsed as another header.
+	headers, text, found := strings.Cut(got, "\r\n\r\n")
+	if !found {
+		t.Fatalf("no header/body separator:\n%s", got)
+	}
+	if strings.Contains(headers, "Use this link") {
+		t.Error("body leaked into the headers")
+	}
+	if !strings.HasPrefix(text, "Use this link:") {
+		t.Errorf("body = %q, want it to start with the link text", text)
+	}
+}
+
+// A line break in a header value ends that header and begins another, so an
+// unchecked field is a free Bcc: on every message. These are refused rather
+// than stripped: silently sending a mangled header hides the bug.
+func TestBuildMessageRefusesHeaderInjection(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  Message
+		from string
+	}{
+		{
+			name: "injection through the recipient",
+			from: "no-reply@example.com",
+			msg:  Message{To: "user@example.org\r\nBcc: attacker@evil.example", Subject: "hi", Body: "x"},
+		},
+		{
+			name: "injection through the subject",
+			from: "no-reply@example.com",
+			msg:  Message{To: "user@example.org", Subject: "hi\r\nBcc: attacker@evil.example", Body: "x"},
+		},
+		{
+			name: "injection through the sender",
+			from: "no-reply@example.com\r\nBcc: attacker@evil.example",
+			msg:  Message{To: "user@example.org", Subject: "hi", Body: "x"},
+		},
+		{
+			name: "bare newline, not just crlf",
+			from: "no-reply@example.com",
+			msg:  Message{To: "user@example.org\nBcc: attacker@evil.example", Subject: "hi", Body: "x"},
+		},
+		{
+			name: "empty recipient",
+			from: "no-reply@example.com",
+			msg:  Message{To: "", Subject: "hi", Body: "x"},
+		},
+		{
+			name: "recipient is not an address",
+			from: "no-reply@example.com",
+			msg:  Message{To: "not-an-address", Subject: "hi", Body: "x"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildMessage(tc.from, tc.msg); err == nil {
+				t.Fatal("buildMessage() = nil error, want a refusal")
+			}
+		})
+	}
+}
+
+func TestNewSMTPMailerParsesURLs(t *testing.T) {
+	cases := []struct {
+		name         string
+		url          string
+		wantAddr     string
+		wantImplicit bool
+		wantAuth     bool
+	}{
+		{"starttls default port", "smtp://smtp.example.com", "smtp.example.com:587", false, false},
+		{"implicit tls default port", "smtps://smtp.example.com", "smtp.example.com:465", true, false},
+		{"explicit port wins", "smtp://smtp.example.com:2525", "smtp.example.com:2525", false, false},
+		{"credentials become auth", "smtp://user:pass@smtp.example.com", "smtp.example.com:587", false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := NewSMTPMailer(tc.url, "no-reply@example.com")
+			if err != nil {
+				t.Fatalf("NewSMTPMailer(%q) = %v, want no error", tc.url, err)
+			}
+			if m.addr != tc.wantAddr {
+				t.Errorf("addr = %q, want %q", m.addr, tc.wantAddr)
+			}
+			if m.implicit != tc.wantImplicit {
+				t.Errorf("implicit = %v, want %v", m.implicit, tc.wantImplicit)
+			}
+			if (m.auth != nil) != tc.wantAuth {
+				t.Errorf("auth set = %v, want %v", m.auth != nil, tc.wantAuth)
+			}
+		})
+	}
+}
+
+func TestNewSMTPMailerRejectsBadInput(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		from string
+	}{
+		{"wrong scheme", "https://smtp.example.com", "no-reply@example.com"},
+		{"no scheme", "smtp.example.com:587", "no-reply@example.com"},
+		{"no host", "smtp://", "no-reply@example.com"},
+		{"sender is not an address", "smtp://smtp.example.com", "no-reply"},
+		{"sender carries a line break", "smtp://smtp.example.com", "a@b.com\r\nBcc: c@d.com"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewSMTPMailer(tc.url, tc.from); err == nil {
+				t.Fatalf("NewSMTPMailer(%q, %q) = nil error, want a refusal", tc.url, tc.from)
+			}
+		})
+	}
+}
+
+func TestIsLoopbackHost(t *testing.T) {
+	for _, host := range []string{"localhost", "LOCALHOST", "127.0.0.1", "::1"} {
+		if !isLoopbackHost(host) {
+			t.Errorf("isLoopbackHost(%q) = false, want true", host)
+		}
+	}
+	for _, host := range []string{"smtp.example.com", "10.0.0.1", "198.51.100.7"} {
+		if isLoopbackHost(host) {
+			t.Errorf("isLoopbackHost(%q) = true, want false", host)
+		}
+	}
+}

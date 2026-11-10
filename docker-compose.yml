@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+      POSTGRES_DB: llm_gateway
+    # The host port is configurable because a Postgres installed on the host
+    # claims 5432 first, and the published port is then silently unreachable.
+    # scripts/env-init.sh picks a free one and records it in .env, which
+    # compose reads for this substitution.
+    #
+    # Published on loopback, not on every interface: this database holds the
+    # password and session hashes, and the credentials are the well-known
+    # gateway/gateway. Without the prefix, joining any untrusted network --
+    # a cafe, a conference, a shared VLAN -- exposes it to everyone on it.
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d llm_gateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Redis 8 bundles the query engine the Phase 2 semantic cache needs for
+  # vector search, so development matches Phase 2 without a second image.
+  redis:
+    image: redis:8-alpine
+    # Loopback for the same reason as Postgres, and more urgently: there is no
+    # Redis password at all, so anyone who can reach the port owns every rate
+    # limit bucket.
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:
