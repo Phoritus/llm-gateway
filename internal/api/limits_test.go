@@ -34,6 +34,37 @@ func TestForeignOriginIsRefused(t *testing.T) {
 	}
 }
 
+// An allowed origin spelled differently from the configured entry must be
+// honoured by both readers of the list: the same-origin guard, which decides
+// whether the request runs at all, and the CORS headers, which decide whether
+// the browser lets the dashboard read the answer. Mixed case with a trailing
+// slash is a spelling only config.Origins.normalizeOrigin accepts, so a reader
+// that grew its own matching rule again fails here rather than in a deployment
+// where one of the two silently stops agreeing.
+func TestAllowedOriginIsMatchedByBothReaders(t *testing.T) {
+	env := newTestEnv(t)
+
+	c := env.newClient()
+	c.origin = "HTTP://LOCALHOST:3000/"
+
+	// A login for an address that does not exist: the point is that the
+	// request reached the handler at all rather than being refused as foreign.
+	res := c.do(http.MethodPost, "/api/auth/login", map[string]any{
+		"email":    "nobody@example.com",
+		"password": testPassword,
+	})
+	if res.errorCode() == "origin_not_allowed" {
+		t.Fatalf("login from an allowed origin spelled %q was refused as foreign", c.origin)
+	}
+	if res.status != http.StatusUnauthorized {
+		t.Fatalf("login status = %d, want 401 for an unknown address", res.status)
+	}
+	// Echoed exactly as sent, which is what a browser compares against.
+	if got := res.header.Get("Access-Control-Allow-Origin"); got != c.origin {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, c.origin)
+	}
+}
+
 func TestHealthEndpoints(t *testing.T) {
 	env := newTestEnv(t)
 	c := env.newClient()

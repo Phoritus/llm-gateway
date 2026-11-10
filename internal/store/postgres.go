@@ -16,8 +16,14 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// Pool exposes the connection pool for callers that need to run their own
-// query, such as the readiness probe.
+// Pool exposes the connection pool so the integration tests can assert on
+// rows this package has no method for -- that a session row was revoked, that
+// a token was spent -- without a query of their own becoming part of the
+// interface every caller sees.
+//
+// Nothing in the service uses it: the readiness probe calls Ping, and a
+// handler that reached past these methods would be a handler writing a
+// tenant-scoped query outside the one layer that filters on workspace_id.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
 // Open connects to Postgres and verifies the connection before returning, so

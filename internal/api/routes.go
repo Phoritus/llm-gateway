@@ -123,15 +123,18 @@ func Routes(d Deps) http.Handler {
 // A wildcard origin is impossible here by construction, which matters because
 // a wildcard plus credentials is exactly the mistake that would expose every
 // session.
-func corsMiddleware(allowed []string) func(http.Handler) http.Handler {
-	normalized := make([]string, 0, len(allowed))
-	for _, a := range allowed {
-		normalized = append(normalized, strings.ToLower(strings.TrimRight(a, "/")))
-	}
+//
+// Whether an Origin matches is config.Origins.Allows, never a rule of this
+// package's own. It was once both: this function kept its own
+// lowercase-and-trim-slash copy, which disagreed with Allows on a
+// whitespace-padded origin -- unreachable over HTTP, since net/http strips
+// optional whitespace from a header value, but a drift the Origins type exists
+// to make impossible rather than merely unlikely.
+func corsMiddleware(allowed config.Origins) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && slices.Contains(normalized, strings.ToLower(strings.TrimRight(origin, "/"))) {
+			if allowed.Allows(origin) {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Set("Access-Control-Allow-Credentials", "true")
