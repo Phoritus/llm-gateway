@@ -182,9 +182,10 @@ func Load() (*Config, error) {
 
 	// Rate-limit buckets are keyed on the client address, so whether
 	// X-Forwarded-For may be believed is a security decision and not a
-	// convenience. Loopback and the private ranges are always treated as
-	// proxies by internal/auth; this list adds the public ranges of whatever
-	// CDN sits in front, and empty means the header is ignored entirely.
+	// convenience. The private ranges are always treated as proxies by
+	// internal/auth -- loopback deliberately is not -- and this list adds the
+	// public ranges of whatever CDN sits in front; empty means the header is
+	// ignored entirely.
 	for _, entry := range splitList(os.Getenv("TRUSTED_PROXIES")) {
 		prefix, err := parsePrefix(entry)
 		if err != nil {

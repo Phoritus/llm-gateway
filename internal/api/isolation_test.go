@@ -24,8 +24,8 @@ func TestCrossTenantIsolation(t *testing.T) {
 	alice := env.signupAndLogin("alice@example.com")
 	env.signupAndLogin("bob@example.com")
 
-	aliceWorkspace := env.workspaceOf(t, "alice@example.com")
-	bobWorkspace := env.workspaceOf(t, "bob@example.com")
+	aliceWorkspace := env.workspaceOf("alice@example.com")
+	bobWorkspace := env.workspaceOf("bob@example.com")
 	aliceID := env.userID("alice@example.com")
 	bobID := env.userID("bob@example.com")
 
@@ -71,7 +71,7 @@ func TestCrossTenantIsolation(t *testing.T) {
 	// A session minted for Alice against Bob's workspace -- what a tampered
 	// workspace switcher would produce -- must not authenticate at all. The
 	// membership join is what refuses it.
-	intruder := env.sessionFor(t, "alice@example.com", bobWorkspace)
+	intruder := env.sessionFor("alice@example.com", bobWorkspace)
 	if res := intruder.do(http.MethodGet, "/api/me", nil); res.status != http.StatusUnauthorized {
 		t.Fatalf("Alice's session in Bob's workspace: status = %d, body = %s, want 401",
 			res.status, res.raw)

@@ -109,9 +109,6 @@ func originRejected(w http.ResponseWriter, _ *http.Request) {
 }
 
 func tooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
-	if retryAfter <= 0 {
-		retryAfter = time.Second
-	}
 	// Retry-After is in seconds and must be at least 1, or a client reading it
 	// as a number gets told to retry immediately.
 	seconds := int(retryAfter.Round(time.Second) / time.Second)

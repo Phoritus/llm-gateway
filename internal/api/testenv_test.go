@@ -232,12 +232,11 @@ func deleteKeys(t *testing.T, rdb *redis.Client, pattern string) {
 // client is one browser: a cookie jar, plus the CSRF header handling a real
 // dashboard would do.
 type client struct {
-	t        *testing.T
-	env      *testEnv
-	http     *http.Client
-	noCSRF   bool
-	origin   string
-	noOrigin bool
+	t      *testing.T
+	env    *testEnv
+	http   *http.Client
+	noCSRF bool
+	origin string
 	// forwardedFor, when set, is sent as X-Forwarded-For. It stands in for a
 	// client claiming to be somewhere else.
 	forwardedFor string
@@ -300,9 +299,7 @@ func (c *client) do(method, path string, body any) response {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if !c.noOrigin {
-		req.Header.Set("Origin", c.origin)
-	}
+	req.Header.Set("Origin", c.origin)
 	if c.forwardedFor != "" {
 		req.Header.Set("X-Forwarded-For", c.forwardedFor)
 	}
@@ -404,11 +401,11 @@ func (e *testEnv) userID(email string) string {
 }
 
 // workspaceOf returns the workspace a user owns.
-func (e *testEnv) workspaceOf(t *testing.T, email string) string {
-	t.Helper()
+func (e *testEnv) workspaceOf(email string) string {
+	e.t.Helper()
 	workspace, err := e.store.DefaultWorkspace(context.Background(), e.userID(email))
 	if err != nil {
-		t.Fatalf("default workspace for %s: %v", email, err)
+		e.t.Fatalf("default workspace for %s: %v", email, err)
 	}
 	return workspace.ID
 }
@@ -417,13 +414,13 @@ func (e *testEnv) workspaceOf(t *testing.T, email string) string {
 // returns a client holding it. It stands in for the workspace switcher the
 // dashboard will have, and lets a test hold a session whose workspace is not
 // the user's own -- which must not authenticate.
-func (e *testEnv) sessionFor(t *testing.T, email, workspaceID string) *client {
-	t.Helper()
+func (e *testEnv) sessionFor(email, workspaceID string) *client {
+	e.t.Helper()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
 	token, _, err := e.deps.Auth.CreateSession(context.Background(), e.userID(email), workspaceID, req)
 	if err != nil {
-		t.Fatalf("create session for %s: %v", email, err)
+		e.t.Fatalf("create session for %s: %v", email, err)
 	}
 
 	c := e.newClient()

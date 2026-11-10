@@ -112,8 +112,8 @@ func (s *Service) ResolveSession(ctx context.Context, token string) (*store.Iden
 		return nil, err
 	}
 
-	now := time.Now()
-	if now.Sub(identity.Session.LastSeenAt) > s.cfg.SessionIdleTTL {
+	idle := time.Since(identity.Session.LastSeenAt)
+	if idle > s.cfg.SessionIdleTTL {
 		// Abandoned session: revoke it rather than leaving a token that would
 		// start working again if the clock or the policy moved.
 		if err := s.store.RevokeSession(ctx, identity.Session.ID); err != nil {
@@ -122,7 +122,7 @@ func (s *Service) ResolveSession(ctx context.Context, token string) (*store.Iden
 		return nil, ErrNoSession
 	}
 
-	if now.Sub(identity.Session.LastSeenAt) > touchInterval {
+	if idle > touchInterval {
 		if err := s.store.TouchSession(ctx, identity.Session.ID); err != nil {
 			return nil, err
 		}
@@ -147,9 +147,9 @@ func (s *Service) RevokeSession(ctx context.Context, token string) error {
 	return s.store.RevokeSession(ctx, identity.Session.ID)
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max]
+	return s[:limit]
 }

@@ -15,13 +15,16 @@ type decodeTarget struct {
 	secret string
 }
 
-func decode(t *testing.T, body string) (*httptest.ResponseRecorder, decodeTarget, bool) {
+// decode runs decodeJSON over a body and reports only the response and the
+// verdict; the tests that care about the decoded value decode into their own
+// target.
+func decode(t *testing.T, body string) (*httptest.ResponseRecorder, bool) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	var dst decodeTarget
-	return w, dst, decodeJSON(w, r, &dst)
+	return w, decodeJSON(w, r, &dst)
 }
 
 func errorCodeOf(t *testing.T, w *httptest.ResponseRecorder) string {
@@ -41,7 +44,7 @@ func errorCodeOf(t *testing.T, w *httptest.ResponseRecorder) string {
 // itself was handed back to the caller -- the one place an internal error
 // message reached a response.
 func TestDecodeJSONRefusesAnUnknownField(t *testing.T) {
-	w, _, ok := decode(t, `{"email":"a@b.com","admin":true}`)
+	w, ok := decode(t, `{"email":"a@b.com","admin":true}`)
 	if ok {
 		t.Fatal("decodeJSON accepted a body with an unknown field")
 	}
@@ -71,7 +74,7 @@ func TestDecodeJSONRefusesAFieldJSONCannotSee(t *testing.T) {
 		`{"email":"a@b.com","secret":"x"}`,
 	} {
 		t.Run(body, func(t *testing.T) {
-			w, _, ok := decode(t, body)
+			w, ok := decode(t, body)
 			if ok {
 				t.Fatalf("decodeJSON accepted %s", body)
 			}
@@ -105,7 +108,7 @@ func TestDecodeJSONKeepsCaseInsensitiveFieldMatching(t *testing.T) {
 // request answer differently from call to call.
 func TestDecodeJSONNamesTheSameFieldEveryTime(t *testing.T) {
 	for range 20 {
-		w, _, ok := decode(t, `{"zebra":1,"admin":2,"mango":3}`)
+		w, ok := decode(t, `{"zebra":1,"admin":2,"mango":3}`)
 		if ok {
 			t.Fatal("decodeJSON accepted a body with unknown fields")
 		}
@@ -147,7 +150,7 @@ func TestDecodeJSONClassifiesBadBodies(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w, _, ok := decode(t, tc.body)
+			w, ok := decode(t, tc.body)
 			if ok {
 				t.Fatalf("decodeJSON accepted %q", tc.body)
 			}
@@ -162,7 +165,7 @@ func TestDecodeJSONClassifiesBadBodies(t *testing.T) {
 // is the difference between a client that must send less and a client that must
 // send something else.
 func TestDecodeJSONRefusesAnOversizedBody(t *testing.T) {
-	w, _, ok := decode(t, `{"email":"`+strings.Repeat("x", maxBodyBytes)+`"}`)
+	w, ok := decode(t, `{"email":"`+strings.Repeat("x", maxBodyBytes)+`"}`)
 	if ok {
 		t.Fatal("decodeJSON accepted a body over the cap")
 	}

@@ -44,19 +44,18 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("connect to %s: %v", envTestDatabase, err)
 	}
+	defer func() { _ = admin.Close(ctx) }()
+
 	var exists bool
 	if err := admin.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, dbName).Scan(&exists); err != nil {
-		_ = admin.Close(ctx)
 		t.Fatalf("look up database %s: %v", dbName, err)
 	}
 	if !exists {
 		if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgx.Identifier{dbName}.Sanitize()); err != nil {
-			_ = admin.Close(ctx)
 			t.Fatalf("create database %s: %v", dbName, err)
 		}
 	}
-	_ = admin.Close(ctx)
 
 	u.Path = "/" + dbName
 	st, err := Open(ctx, u.String())

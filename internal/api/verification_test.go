@@ -1,10 +1,7 @@
 package api
 
-// Email-verification enforcement. This is the first slice off
-// integration_test.go, which had grown to the 1000-line limit covering auth,
-// isolation and rate limits in one file; the rest of that split is still to
-// come. The shared fixtures -- newTestEnv, client, the capturing mailer -- live
-// there and are available to every test in the package.
+// Email-verification enforcement. The shared fixtures -- newTestEnv, client,
+// the capturing mailer -- live in testenv_test.go.
 
 import (
 	"net/http"
