@@ -10,7 +10,8 @@ adding files.
 
 | Package | State |
 | --- | --- |
-| `config`, `store`, `telemetry` | Built: env loading, pgx pool, goose migrations, Redis, request id, redacting access log |
+| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis |
+| `telemetry` | Built: request id, redacting access log (with `trace_id`), OpenTelemetry setup over OTLP, bounded `http.route` labelling, `postgres.up`/`redis.up` gauges. `store` adds the pool gauges and `ratelimit` the `ratelimit.rejections` counter |
 | `auth` | Sessions, argon2id passwords, CSRF, email verification, password reset. **Gateway keys are not written yet** |
 | `api` | Auth endpoints, health probes |
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
@@ -51,6 +52,7 @@ Day to day:
 | `make deps-up` / `deps-down` | Start or stop Postgres and Redis, waiting for health |
 | `make deps-reset` | Stop them and drop the volumes |
 | `make psql` / `make redis-cli` | A shell on either dependency |
+| `make obs-up` / `obs-down` / `obs-status` | Start, stop or show the local Grafana stack (`grafana/otel-lgtm`, Grafana on `127.0.0.1:3000`, admin/admin). Opt-in: `deps-up` never starts it, and `deps-down` does not stop it |
 | `make check` | `fmt-check`, `vet`, `build`, unit tests — must pass before a commit |
 | `make test` | Unit tests; the ones needing a database skip |
 | `make test-int` | Every test, starting a throwaway Postgres and Redis first |
@@ -62,6 +64,22 @@ Day to day:
 is missing: `winget install ezwinports.make`.
 
 ### Things that catch people out
+
+**The `http.route` label must never be a raw URL path.** `telemetry.Route`
+reports a registered pattern (`/healthz`, `/api/me`, chi's `/api/auth/*`) or
+the fixed `unmatched`, and `api.routeTelemetry` feeds it chi's pattern, because
+`otelhttp` cannot see a sub-router's match. A path with an id in it would mint
+a new metric series per id, and Grafana Cloud's free tier accepts about 10k
+active series before it drops data. The same goes for any label you add to a
+metric: use a value from a fixed set (`ratelimit.rejections` is labelled by
+`scope`, a literal at every call site, and never by the id). Telemetry is off
+when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty; production logs a warning.
+
+**`OTEL_EXPORTER_OTLP_HEADERS` is a secret.** For Grafana Cloud it holds the
+access token. `config` deliberately does not read it, the OTLP exporters read
+it from the environment themselves, and nothing may log it. Set it in the
+deployment's own settings, not in a file that is committed or shared, and never
+in `.env.prod` on the user's behalf.
 
 **A placeholder `MASTER_KEY` stops the service from starting.** The config
 loader requires 32 bytes of base64 and refuses to run without it, by design.
