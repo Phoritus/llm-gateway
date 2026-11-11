@@ -72,6 +72,20 @@ psql: ## Open a psql shell on the development database
 redis-cli: ## Open a redis-cli shell
 	@scripts/deps.sh redis-cli
 
+# --- Observability -----------------------------------------------------------
+
+.PHONY: obs-up
+obs-up: ## Start Grafana, Prometheus, Tempo and Loki and wait for Grafana
+	@scripts/obs.sh up
+
+.PHONY: obs-down
+obs-down: ## Stop the observability stack
+	@scripts/obs.sh down
+
+.PHONY: obs-status
+obs-status: ## Show the observability container
+	@scripts/obs.sh status
+
 # --- Checks ------------------------------------------------------------------
 
 .PHONY: check

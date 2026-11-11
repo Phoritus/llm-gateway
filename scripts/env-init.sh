@@ -42,7 +42,7 @@ backup_env() {
 }
 
 write_fresh_env() {
-	local master_key session_secret postgres_port redis_port
+	local master_key session_secret postgres_port redis_port grafana_port otlp_grpc_port otlp_http_port
 
 	master_key="$(random_base64 32)"
 	session_secret="$(random_base64 48)"
@@ -53,6 +53,10 @@ write_fresh_env() {
 	# authentication instead of failing to connect.
 	postgres_port="$(pick_port 5432)"
 	redis_port="$(pick_port 6379)"
+
+	grafana_port="$(pick_port 3000)"
+	otlp_grpc_port="$(pick_port 4317)"
+	otlp_http_port="$(pick_port 4318)"
 
 	if [[ "$postgres_port" != "5432" ]]; then
 		warn "port 5432 is already in use, so Postgres will be published on $postgres_port"
@@ -97,6 +101,16 @@ MAIL_FROM=no-reply@localhost
 
 SEMANTIC_CACHE=off
 CONTEXT_HANDOFF=off
+
+# Telemetry stays off until you start the local stack with "make obs-up" and
+# uncomment the endpoint. The ports are where compose publishes Grafana and the
+# OTLP receiver. Cloud settings and the sampler are in .env.example.
+OTEL_SERVICE_NAME=llm-gateway
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+GRAFANA_PORT=$grafana_port
+OTLP_GRPC_PORT=$otlp_grpc_port
+OTLP_HTTP_PORT=$otlp_http_port
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$otlp_http_port
 EOF
 
 	log "wrote .env with a fresh MASTER_KEY and SESSION_SECRET"
