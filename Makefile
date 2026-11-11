@@ -24,11 +24,11 @@ help: ## List the available commands
 # --- Getting started ---------------------------------------------------------
 
 .PHONY: setup
-setup: env deps-up ## Create .env and start Postgres and Redis
+setup: env deps-up ## Create .env.dev and start Postgres and Redis
 	@printf '\nReady. Run "make run" to start the service.\n'
 
 .PHONY: env
-env: ## Write .env with freshly generated secrets (keeps an existing one)
+env: ## Write .env.dev with freshly generated secrets (keeps an existing one)
 	@scripts/env-init.sh
 
 .PHONY: env-secrets
@@ -36,7 +36,7 @@ env-secrets: ## Fill in only a missing or placeholder MASTER_KEY/SESSION_SECRET
 	@scripts/env-init.sh --fill-secrets
 
 .PHONY: run
-run: ## Run the service with .env loaded
+run: ## Run the service with .env.dev (or $$ENV_FILE) loaded
 	@scripts/run.sh
 
 .PHONY: dev

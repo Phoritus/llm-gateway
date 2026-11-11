@@ -16,12 +16,12 @@ obs_compose() {
 }
 
 # env_value <key> <default> reads one variable from the environment, then from
-# .env, without loading the whole file: compose reads the same .env for the
+# ENV_FILE, without loading the whole file: compose reads the same file for the
 # port substitution, and this must agree with it.
 env_value() {
 	local key="$1" fallback="$2" value="${!1:-}"
-	if [[ -z "$value" && -f .env ]]; then
-		value="$(sed -n "s/^[[:space:]]*${key}=//p" .env | tail -1 | tr -d '\r')"
+	if [[ -z "$value" && -f "$ENV_FILE" ]]; then
+		value="$(sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tail -1 | tr -d '\r')"
 	fi
 	printf '%s' "${value:-$fallback}"
 }
@@ -35,7 +35,7 @@ wait_grafana() {
 	until curl -fsS --max-time 3 "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; do
 		if ((SECONDS >= deadline)); then
 			obs_compose ps
-			die "Grafana did not answer /api/health within 120s. If the port is taken, set GRAFANA_PORT in .env."
+			die "Grafana did not answer /api/health within 120s. If the port is taken, set GRAFANA_PORT in $ENV_FILE."
 		fi
 		sleep 2
 	done

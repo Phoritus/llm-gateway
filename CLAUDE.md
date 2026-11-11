@@ -37,8 +37,8 @@ the logic in the script, not in the Makefile recipe.
 From a fresh checkout:
 
 ```sh
-make setup      # write .env with generated secrets, start Postgres and Redis
-make run        # run the service with .env loaded
+make setup      # write .env.dev with generated secrets, start Postgres and Redis
+make run        # run the service with .env.dev loaded
 ```
 
 Day to day:
@@ -47,7 +47,7 @@ Day to day:
 | --- | --- |
 | `make` | List every target |
 | `make dev` | Start the dependencies, then the service |
-| `make run` | Run the service with `.env` loaded (creates `.env` if missing) |
+| `make run` | Run the service with `.env.dev` loaded (creates it if missing); `ENV_FILE=…` picks another file |
 | `make build` | Compile to `bin/gateway` |
 | `make deps-up` / `deps-down` | Start or stop Postgres and Redis, waiting for health |
 | `make deps-reset` | Stop them and drop the volumes |
@@ -84,7 +84,7 @@ in `.env.prod` on the user's behalf.
 **A placeholder `MASTER_KEY` stops the service from starting.** The config
 loader requires 32 bytes of base64 and refuses to run without it, by design.
 `make env-secrets` generates only that and `SESSION_SECRET`, leaving every
-other line of an existing `.env` byte for byte — which matters when `.env`
+other line of an existing `.env.dev` byte for byte — which matters when it
 holds real provider URLs and tokens.
 
 **Rate limits are keyed on the client address, so `TRUSTED_PROXIES` is a
@@ -123,7 +123,7 @@ and which failure a client saw depended on which layer ran first.
 dependencies.** `APP_ENV=development` reads `DATABASE_URL_LOCAL` and
 `REDIS_URL_LOCAL`; `APP_ENV=production` reads `DATABASE_URL` and `REDIS_URL`.
 Neither name falls back to the other, so a local and a deployed URL can sit in
-the same `.env` without either one shadowing the other. With one name for both
+the same env file without either one shadowing the other. With one name for both
 they competed for the same line, the later one won in silence, and a service
 started for local work migrated and wrote to the production database with
 nothing in its output to say which it had opened. `load_env` now also refuses
@@ -141,7 +141,7 @@ port no longer matches: `TEST_PG_PORT=55032 make test-int`.
 **A Postgres installed on the host shadows the compose container.** Docker's
 published port loses that race silently, so connections reach the other server
 and fail *authentication* rather than failing to connect. `POSTGRES_PORT` and
-`REDIS_PORT` in `.env` set what compose publishes, and `make env` picks free
+`REDIS_PORT` in `.env.dev` set what compose publishes, and `make env` picks free
 ports when the defaults are taken. The integration tests sidestep it entirely
 by running their own Postgres on `55432`.
 
@@ -225,7 +225,7 @@ Most free providers already speak OpenAI format, so `provider/openai` with a con
 
 ## Configuration
 
-Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `.env` holds real secrets and is gitignored.
+Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `.env.dev` holds the local secrets and is gitignored. The scripts read it for local work (`ENV_FILE=<file>` picks another) and refuse `ENV_FILE=.env.prod` by name, so no `make` target can open the production file.
 
 ## Phasing
 

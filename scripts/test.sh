@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 require go "Install Go 1.26 or newer."
 
-# .env records which host port the compose Redis publishes on, which may not
+# ENV_FILE records which host port the compose Redis publishes on, which may not
 # be the default if something else already held it.
 load_env || true
 redis_port="${REDIS_PORT:-6379}"
