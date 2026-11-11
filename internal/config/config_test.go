@@ -34,7 +34,7 @@ func apply(t *testing.T, env map[string]string) {
 		"DATABASE_URL", "DATABASE_URL_LOCAL", "REDIS_URL", "REDIS_URL_LOCAL",
 		"MASTER_KEY", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
-		"VERIFICATION_TTL", "RESET_TTL",
+		"VERIFICATION_TTL", "RESET_TTL", "OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -277,5 +277,33 @@ func TestLoadOwnsTheMailedTokenLifetimes(t *testing.T) {
 	apply(t, env)
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() with a negative RESET_TTL = nil error, want a refusal")
+	}
+}
+
+func TestLoadReadsTheOTLPEndpoint(t *testing.T) {
+	env := productionEnv(t)
+	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "  http://127.0.0.1:4318 "
+	apply(t, env)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.OTLPEndpoint != "http://127.0.0.1:4318" {
+		t.Errorf("OTLPEndpoint = %q, want the trimmed value", cfg.OTLPEndpoint)
+	}
+}
+
+// Telemetry is optional even in production: an unset endpoint must not stop
+// the service from starting.
+func TestLoadAllowsNoOTLPEndpointInProduction(t *testing.T) {
+	apply(t, productionEnv(t))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if cfg.OTLPEndpoint != "" {
+		t.Errorf("OTLPEndpoint = %q, want empty", cfg.OTLPEndpoint)
 	}
 }

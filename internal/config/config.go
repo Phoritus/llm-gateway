@@ -77,7 +77,12 @@ type Config struct {
 	// SMTPURL is the relay verification and reset mail goes through, as
 	// smtp://user:pass@host:587 or smtps://user:pass@host:465. Empty is
 	// allowed only outside production, where mail goes to the log instead.
-	SMTPURL         string
+	SMTPURL string
+	// OTLPEndpoint is where telemetry is exported. Empty disables it. The
+	// credentials in OTEL_EXPORTER_OTLP_HEADERS are deliberately not read
+	// here: the SDK reads them itself, so they never pass through anything
+	// that could log them.
+	OTLPEndpoint    string
 	SemanticCache   bool
 	ContextHandoff  bool
 	ShutdownTimeout time.Duration
@@ -107,6 +112,7 @@ func Load() (*Config, error) {
 		MailFrom:        envOr("MAIL_FROM", "no-reply@localhost"),
 		PublicBaseURL:   strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
 		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
+		OTLPEndpoint:    strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 		ShutdownTimeout: 20 * time.Second,
 	}
 
