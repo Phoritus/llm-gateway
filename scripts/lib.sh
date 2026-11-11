@@ -100,6 +100,11 @@ load_env() {
 		fi
 		seen[$key]=$lineno
 
+		# Whitespace around the value is dropped first, or a stray space after
+		# a closing quote keeps the quotes inside the value.
+		value="${value#"${value%%[![:space:]]*}"}"
+		value="${value%"${value##*[![:space:]]}"}"
+
 		# Strip one layer of matching quotes, as dotenv readers do.
 		if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
 			value="${value:1:${#value}-2}"

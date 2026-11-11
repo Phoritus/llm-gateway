@@ -282,7 +282,7 @@ func TestLoadOwnsTheMailedTokenLifetimes(t *testing.T) {
 
 func TestLoadReadsTheOTLPEndpoint(t *testing.T) {
 	env := productionEnv(t)
-	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "  http://127.0.0.1:4318 "
+	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:4318"
 	apply(t, env)
 
 	cfg, err := Load()
@@ -290,7 +290,26 @@ func TestLoadReadsTheOTLPEndpoint(t *testing.T) {
 		t.Fatalf("Load() = %v", err)
 	}
 	if cfg.OTLPEndpoint != "http://127.0.0.1:4318" {
-		t.Errorf("OTLPEndpoint = %q, want the trimmed value", cfg.OTLPEndpoint)
+		t.Errorf("OTLPEndpoint = %q, want %q", cfg.OTLPEndpoint, "http://127.0.0.1:4318")
+	}
+}
+
+// The SDK falls back to https://localhost:4318 on a value it cannot use, so
+// each of these must stop the service instead.
+func TestLoadRefusesAnUnusableOTLPEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		`"https://otlp.example.com/otlp"`,
+		"https://otlp.example.com/otlp ",
+		" https://otlp.example.com/otlp",
+		"otlp.example.com:4318",
+		"ftp://otlp.example.com",
+	} {
+		env := productionEnv(t)
+		env["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
+		apply(t, env)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() with OTEL_EXPORTER_OTLP_ENDPOINT=%q = nil error, want a refusal", endpoint)
+		}
 	}
 }
 

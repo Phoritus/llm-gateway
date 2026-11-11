@@ -112,7 +112,7 @@ func Load() (*Config, error) {
 		MailFrom:        envOr("MAIL_FROM", "no-reply@localhost"),
 		PublicBaseURL:   strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
 		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
-		OTLPEndpoint:    strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
+		OTLPEndpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		ShutdownTimeout: 20 * time.Second,
 	}
 
@@ -268,6 +268,17 @@ func Load() (*Config, error) {
 		// on the path, which defeats the point of mailing it rather than
 		// showing it.
 		fail("PUBLIC_BASE_URL must use https when APP_ENV is %q, got %q", EnvProduction, cfg.PublicBaseURL)
+	}
+
+	// The SDK reads this variable again by itself, untrimmed, and on a value it
+	// cannot parse it logs once and exports to https://localhost:4318 instead.
+	// That surfaces later as unrelated-looking TLS errors, so the exact value
+	// the SDK will see is checked here.
+	if cfg.OTLPEndpoint != "" {
+		if u, err := url.Parse(cfg.OTLPEndpoint); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") ||
+			strings.ContainsAny(cfg.OTLPEndpoint, " \t\r\n\"'") {
+			fail("OTEL_EXPORTER_OTLP_ENDPOINT must be an absolute http or https URL, got %q", cfg.OTLPEndpoint)
+		}
 	}
 
 	if b, err := boolOr("SEMANTIC_CACHE", false); err != nil {
