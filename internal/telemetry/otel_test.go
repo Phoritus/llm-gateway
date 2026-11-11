@@ -21,7 +21,6 @@ func TestSetupWithoutAnEndpointChangesNothing(t *testing.T) {
 	if otel.GetMeterProvider() != meterBefore || otel.GetTracerProvider() != tracerBefore {
 		t.Error("Setup with no endpoint replaced a global provider")
 	}
-	// Instrumentation must stay usable and silent.
 	_, span := otel.Tracer("t").Start(context.Background(), "x")
 	if span.SpanContext().IsValid() {
 		t.Error("a span recorded with telemetry disabled")

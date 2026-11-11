@@ -92,14 +92,12 @@ func TestRouteLabelIsThePatternNotThePath(t *testing.T) {
 		}
 	}
 
-	for _, span := range recorder.Ended() {
-		if strings.Contains(span.Name(), "1111") || strings.Contains(span.Name(), "no/such") || strings.Contains(span.Name(), "elsewhere") {
-			t.Errorf("span name %q carries a raw path", span.Name())
-		}
-	}
 	names := map[string]bool{}
 	for _, span := range recorder.Ended() {
 		names[span.Name()] = true
+		if strings.Contains(span.Name(), "1111") || strings.Contains(span.Name(), "no/such") || strings.Contains(span.Name(), "elsewhere") {
+			t.Errorf("span name %q carries a raw path", span.Name())
+		}
 	}
 	if !names["GET /api/things/{id}"] {
 		t.Errorf("span names = %v, want one named after the pattern", names)

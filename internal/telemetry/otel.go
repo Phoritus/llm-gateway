@@ -40,9 +40,8 @@ type Settings struct {
 // variables, which is what lets a deployment move from the local stack to
 // Grafana Cloud without a code change.
 func Setup(ctx context.Context, s Settings) (shutdown func(context.Context) error, err error) {
-	noop := func(context.Context) error { return nil }
 	if s.Endpoint == "" {
-		return noop, nil
+		return func(context.Context) error { return nil }, nil
 	}
 
 	serviceName := os.Getenv("OTEL_SERVICE_NAME")
@@ -54,16 +53,16 @@ func Setup(ctx context.Context, s Settings) (shutdown func(context.Context) erro
 		attribute.String("deployment.environment", s.Environment),
 	))
 	if err != nil {
-		return noop, fmt.Errorf("telemetry: build resource: %w", err)
+		return nil, fmt.Errorf("telemetry: build resource: %w", err)
 	}
 
 	metricExp, err := otlpmetrichttp.New(ctx)
 	if err != nil {
-		return noop, fmt.Errorf("telemetry: metric exporter: %w", err)
+		return nil, fmt.Errorf("telemetry: metric exporter: %w", err)
 	}
 	traceExp, err := otlptracehttp.New(ctx)
 	if err != nil {
-		return noop, fmt.Errorf("telemetry: trace exporter: %w", err)
+		return nil, fmt.Errorf("telemetry: trace exporter: %w", err)
 	}
 
 	mp := sdkmetric.NewMeterProvider(
