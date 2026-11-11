@@ -21,6 +21,7 @@ import (
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
+	"llm-gateway/internal/telemetry"
 )
 
 // csrfHeaderName is referenced in error messages.
@@ -60,6 +61,7 @@ func (d Deps) logger() *slog.Logger {
 func Routes(d Deps) http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(routeTelemetry)
 	r.Use(corsMiddleware(d.Config.AllowedOrigins))
 	r.Use(auth.RequireSameOrigin(d.Config.AllowedOrigins, originRejected))
 
@@ -115,6 +117,22 @@ func Routes(d Deps) http.Handler {
 			"That method is not allowed on this endpoint.")
 	})
 	return r
+}
+
+// routeTelemetry reports the matched chi pattern to the telemetry layer. It
+// reads the pattern after the handlers have run, because chi fills it in
+// while routing, and it is first in the chain so the preflights and rejections
+// the later middleware answers are labelled too. chi sees the path with /api
+// already stripped, so the prefix is put back.
+func routeTelemetry(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		route := telemetry.UnmatchedRoute
+		if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
+			route = "/api" + pattern
+		}
+		telemetry.SetRoute(r.Context(), route)
+	})
 }
 
 // corsMiddleware allows the dashboard origin with credentials. It is written

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestRequestIDGeneratesAndEchoes(t *testing.T) {
@@ -107,5 +109,24 @@ func TestAccessLogPreservesFlusher(t *testing.T) {
 
 	if !flushable {
 		t.Fatal("the wrapped ResponseWriter does not implement http.Flusher")
+	}
+}
+
+func TestAccessLogCarriesTheTraceIDOfAValidSpan(t *testing.T) {
+	var buf bytes.Buffer
+	handler := AccessLog(slog.New(slog.NewJSONHandler(&buf, nil)))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	traceID, _ := trace.TraceIDFromHex("0102030405060708090a0b0c0d0e0f10")
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled})
+	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), r.WithContext(trace.ContextWithSpanContext(r.Context(), sc)))
+	if !strings.Contains(buf.String(), `"trace_id":"0102030405060708090a0b0c0d0e0f10"`) {
+		t.Errorf("log line %q lacks the trace id", buf.String())
+	}
+
+	buf.Reset()
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if strings.Contains(buf.String(), "trace_id") {
+		t.Errorf("log line %q has a trace_id without a span", buf.String())
 	}
 }
