@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RequestIDHeader is the header a request id is read from and returned in.
@@ -129,14 +131,18 @@ func AccessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 			}
 			// The path is logged without its query string, because tokens
 			// arrive there.
-			logger.LogAttrs(r.Context(), levelFor(rec.status), "request",
+			attrs := []slog.Attr{
 				slog.String("request_id", RequestIDFrom(r.Context())),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Int("status", rec.status),
 				slog.Int("bytes", rec.bytes),
 				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-			)
+			}
+			if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+				attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()))
+			}
+			logger.LogAttrs(r.Context(), levelFor(rec.status), "request", attrs...)
 		})
 	}
 }

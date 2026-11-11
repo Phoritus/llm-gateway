@@ -10,7 +10,8 @@ adding files.
 
 | Package | State |
 | --- | --- |
-| `config`, `store`, `telemetry` | Built: env loading, pgx pool, goose migrations, Redis, request id, redacting access log |
+| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis |
+| `telemetry` | Built: request id, redacting access log (with `trace_id`), OpenTelemetry setup over OTLP, bounded `http.route` labelling, `postgres.up`/`redis.up` gauges. `store` adds the pool gauges and `ratelimit` the `ratelimit.rejections` counter |
 | `auth` | Sessions, argon2id passwords, CSRF, email verification, password reset. **Gateway keys are not written yet** |
 | `api` | Auth endpoints, health probes |
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
@@ -36,8 +37,8 @@ the logic in the script, not in the Makefile recipe.
 From a fresh checkout:
 
 ```sh
-make setup      # write .env with generated secrets, start Postgres and Redis
-make run        # run the service with .env loaded
+make setup      # write .env.dev with generated secrets, start Postgres and Redis
+make run        # run the service with .env.dev loaded
 ```
 
 Day to day:
@@ -46,11 +47,12 @@ Day to day:
 | --- | --- |
 | `make` | List every target |
 | `make dev` | Start the dependencies, then the service |
-| `make run` | Run the service with `.env` loaded (creates `.env` if missing) |
+| `make run` | Run the service with `.env.dev` loaded (creates it if missing); `ENV_FILE=…` picks another file |
 | `make build` | Compile to `bin/gateway` |
 | `make deps-up` / `deps-down` | Start or stop Postgres and Redis, waiting for health |
 | `make deps-reset` | Stop them and drop the volumes |
 | `make psql` / `make redis-cli` | A shell on either dependency |
+| `make obs-up` / `obs-down` / `obs-status` | Start, stop or show the local Grafana stack (`grafana/otel-lgtm`, Grafana on `127.0.0.1:3000`, admin/admin). Opt-in: `deps-up` never starts it, and `deps-down` does not stop it |
 | `make check` | `fmt-check`, `vet`, `build`, unit tests — must pass before a commit |
 | `make test` | Unit tests; the ones needing a database skip |
 | `make test-int` | Every test, starting a throwaway Postgres and Redis first |
@@ -63,10 +65,26 @@ is missing: `winget install ezwinports.make`.
 
 ### Things that catch people out
 
+**The `http.route` label must never be a raw URL path.** `telemetry.Route`
+reports a registered pattern (`/healthz`, `/api/me`, chi's `/api/auth/*`) or
+the fixed `unmatched`, and `api.routeTelemetry` feeds it chi's pattern, because
+`otelhttp` cannot see a sub-router's match. A path with an id in it would mint
+a new metric series per id, and Grafana Cloud's free tier accepts about 10k
+active series before it drops data. The same goes for any label you add to a
+metric: use a value from a fixed set (`ratelimit.rejections` is labelled by
+`scope`, a literal at every call site, and never by the id). Telemetry is off
+when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty; production logs a warning.
+
+**`OTEL_EXPORTER_OTLP_HEADERS` is a secret.** For Grafana Cloud it holds the
+access token. `config` deliberately does not read it, the OTLP exporters read
+it from the environment themselves, and nothing may log it. Set it in the
+deployment's own settings, not in a file that is committed or shared, and never
+in `.env.prod` on the user's behalf.
+
 **A placeholder `MASTER_KEY` stops the service from starting.** The config
 loader requires 32 bytes of base64 and refuses to run without it, by design.
 `make env-secrets` generates only that and `SESSION_SECRET`, leaving every
-other line of an existing `.env` byte for byte — which matters when `.env`
+other line of an existing `.env.dev` byte for byte — which matters when it
 holds real provider URLs and tokens.
 
 **Rate limits are keyed on the client address, so `TRUSTED_PROXIES` is a
@@ -105,7 +123,7 @@ and which failure a client saw depended on which layer ran first.
 dependencies.** `APP_ENV=development` reads `DATABASE_URL_LOCAL` and
 `REDIS_URL_LOCAL`; `APP_ENV=production` reads `DATABASE_URL` and `REDIS_URL`.
 Neither name falls back to the other, so a local and a deployed URL can sit in
-the same `.env` without either one shadowing the other. With one name for both
+the same env file without either one shadowing the other. With one name for both
 they competed for the same line, the later one won in silence, and a service
 started for local work migrated and wrote to the production database with
 nothing in its output to say which it had opened. `load_env` now also refuses
@@ -123,7 +141,7 @@ port no longer matches: `TEST_PG_PORT=55032 make test-int`.
 **A Postgres installed on the host shadows the compose container.** Docker's
 published port loses that race silently, so connections reach the other server
 and fail *authentication* rather than failing to connect. `POSTGRES_PORT` and
-`REDIS_PORT` in `.env` set what compose publishes, and `make env` picks free
+`REDIS_PORT` in `.env.dev` set what compose publishes, and `make env` picks free
 ports when the defaults are taken. The integration tests sidestep it entirely
 by running their own Postgres on `55432`.
 
@@ -207,7 +225,7 @@ Most free providers already speak OpenAI format, so `provider/openai` with a con
 
 ## Configuration
 
-Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `.env` holds real secrets and is gitignored.
+Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `.env.dev` holds the local secrets and is gitignored. The scripts read it for local work (`ENV_FILE=<file>` picks another) and refuse `ENV_FILE=.env.prod` by name, so no `make` target can open the production file.
 
 ## Phasing
 

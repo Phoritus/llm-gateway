@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestRuleConstructors(t *testing.T) {
@@ -208,5 +211,47 @@ func TestAllowRejectsAnUnusableRule(t *testing.T) {
 		if _, err := limiter.AllowN(context.Background(), "test", "id", rule, 1); err == nil {
 			t.Fatalf("Allow with rule %+v returned no error", rule)
 		}
+	}
+}
+
+func TestDeniedChecksAreCountedByScope(t *testing.T) {
+	client := testRedis(t)
+	limiter := testLimiter(t, client)
+	ctx := context.Background()
+
+	// The global provider can be installed once per process, which is why this
+	// is the only test that does.
+	reader := sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+
+	scope := "telemetry-test"
+	id := "count-" + time.Now().Format("150405.000000")
+	rule := Rule{Burst: 1, Refill: 0.01, TTL: time.Minute}
+
+	for i := range 4 {
+		if _, err := limiter.AllowN(ctx, scope, id, rule, 1); err != nil {
+			t.Fatalf("AllowN %d: %v", i, err)
+		}
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	var denied int64 = -1
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ratelimit.rejections" {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				if v, _ := dp.Attributes.Value("scope"); v.AsString() == scope {
+					denied = dp.Value
+				}
+			}
+		}
+	}
+	if denied != 3 {
+		t.Fatalf("rejections for scope %q = %d, want 3 (1 allowed of 4)", scope, denied)
 	}
 }

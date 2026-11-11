@@ -5,8 +5,8 @@
 .env
 .env.local
 # Backups written by scripts/env-init.sh; they hold the previous secrets.
-.env.backup.*
-.env.tmp.*
+.env*.backup.*
+.env*.tmp.*
 .env.prod
 .env.dev
 

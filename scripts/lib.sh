@@ -17,6 +17,17 @@ TEST_PG_IMAGE="${TEST_PG_IMAGE:-postgres:17-alpine}"
 TEST_PG_DB="${TEST_PG_DB:-llm_gateway_test}"
 TEST_REDIS_DB="${TEST_REDIS_DB:-1}"
 
+# ENV_FILE is the one file local work reads: the service's variables for
+# "make run" and the host ports compose publishes on. .env.prod is refused by
+# name. It holds the live deployment's secrets and is not backed up anywhere,
+# so no script here may read it, let alone regenerate its secrets.
+ENV_FILE="${ENV_FILE:-.env.dev}"
+if [[ "$(basename "$ENV_FILE")" == ".env.prod" ]]; then
+	printf 'error: ENV_FILE=%s refused: the scripts never read the production env file
+' "$ENV_FILE" >&2
+	exit 1
+fi
+
 if [[ -t 1 ]]; then
 	C_INFO=$'\033[1;34m'
 	C_WARN=$'\033[1;33m'
@@ -55,13 +66,13 @@ random_base64() {
 	fi
 }
 
-# load_env reads .env into the environment.
+# load_env reads ENV_FILE into the environment.
 #
 # It parses KEY=VALUE itself rather than sourcing the file. Sourcing would
 # execute whatever is in there, and a value containing spaces — which
 # .env.example has — would be read as a command and fail.
 load_env() {
-	local file="${1:-.env}"
+	local file="${1:-$ENV_FILE}"
 	[[ -f "$file" ]] || return 1
 
 	# A key written twice is refused rather than resolved. The last assignment
@@ -88,6 +99,11 @@ load_env() {
 			die "$file sets $key twice, on lines ${seen[$key]} and $lineno. Delete one: the later line would win and nothing would say so."
 		fi
 		seen[$key]=$lineno
+
+		# Whitespace around the value is dropped first, or a stray space after
+		# a closing quote keeps the quotes inside the value.
+		value="${value#"${value%%[![:space:]]*}"}"
+		value="${value%"${value##*[![:space:]]}"}"
 
 		# Strip one layer of matching quotes, as dotenv readers do.
 		if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
@@ -125,7 +141,12 @@ pick_port() {
 	die "no free port found starting at $1"
 }
 
-# compose runs docker compose for this project.
+# compose runs docker compose for this project. Compose only finds a file
+# named .env on its own, so the port overrides in ENV_FILE are passed in.
 compose() {
-	docker compose "$@"
+	if [[ -f "$ENV_FILE" ]]; then
+		docker compose --env-file "$ENV_FILE" "$@"
+	else
+		docker compose "$@"
+	fi
 }

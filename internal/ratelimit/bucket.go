@@ -8,7 +8,16 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
+
+// rejections counts denied checks. It resolves against the global meter on
+// first use of the package, so it is a no-op until telemetry.Setup installs a
+// provider.
+var rejections, _ = otel.Meter("llm-gateway/ratelimit").Int64Counter("ratelimit.rejections",
+	metric.WithDescription("Checks the token bucket denied, by scope."))
 
 //go:embed bucket.lua
 var bucketScript string
@@ -64,7 +73,10 @@ func New(client *redis.Client) *Limiter {
 }
 
 // AllowN spends cost tokens. The data plane uses a cost above one to reserve
-// estimated tokens before a provider call.
+// estimated tokens before a provider call. A denial is counted under the
+// scope label, so scope must stay a fixed name chosen by the caller
+// ("login:ip"), never something derived from the request: each distinct
+// value becomes a metric series.
 func (l *Limiter) AllowN(ctx context.Context, scope, id string, rule Rule, cost float64) (Decision, error) {
 	if rule.Refill <= 0 || rule.Burst <= 0 {
 		return Decision{}, fmt.Errorf("ratelimit: rule for %q must have a positive burst and refill", scope)
@@ -91,6 +103,10 @@ func (l *Limiter) AllowN(ctx context.Context, scope, id string, rule Rule, cost 
 	// silent reinterpretation of the slice.
 	if len(res) != 3 {
 		return Decision{}, fmt.Errorf("ratelimit: bucket script returned %d values, want 3", len(res))
+	}
+
+	if res[0] != 1 {
+		rejections.Add(ctx, 1, metric.WithAttributes(attribute.String("scope", scope)))
 	}
 
 	return Decision{

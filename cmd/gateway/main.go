@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"llm-gateway/internal/api"
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
@@ -48,6 +50,29 @@ func run(logger *slog.Logger) error {
 		slog.Bool("semantic_cache", cfg.SemanticCache),
 		slog.Bool("context_handoff", cfg.ContextHandoff),
 	)
+
+	// A deployment without an endpoint runs fine, just unobserved. That is a
+	// state worth saying out loud in production and a non-event locally.
+	if cfg.OTLPEndpoint == "" && cfg.IsProduction() {
+		logger.Warn("OTEL_EXPORTER_OTLP_ENDPOINT is empty: metrics and traces are not being exported")
+	}
+	shutdownTelemetry, err := telemetry.Setup(ctx, telemetry.Settings{
+		Endpoint:    cfg.OTLPEndpoint,
+		Environment: string(cfg.Env),
+	})
+	if err != nil {
+		return err
+	}
+	// Deferred first so it runs last: after the server has drained, the last
+	// requests' spans and metrics are in what gets flushed, and an early
+	// return still flushes whatever was recorded before it.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(flushCtx); err != nil {
+			logger.Error("telemetry shutdown failed", slog.String("error", err.Error()))
+		}
+	}()
 
 	st, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -120,13 +145,28 @@ func run(logger *slog.Logger) error {
 	// list is written here because this is where those clients are opened.
 	// Redis counts: rate limiting refuses requests when it is unavailable, so an
 	// instance without it cannot serve a login.
-	api.Health(logger,
-		api.Check{Name: "postgres", Ping: st.Ping},
-		api.Check{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
-	)(mux)
+	checks := []api.Check{
+		{Name: "postgres", Ping: st.Ping},
+		{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
+	}
+	api.Health(logger, checks...)(mux)
+	if err := st.RegisterMetrics(); err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if err := telemetry.ObserveUp(check.Name, check.Ping); err != nil {
+			return err
+		}
+	}
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
 
-	handler := telemetry.RequestID(telemetry.AccessLog(logger)(mux))
+	// otelhttp is outermost so the span exists when the access log reads its
+	// trace id. Route sits next to the mux because it needs the request the
+	// mux matched.
+	handler := otelhttp.NewHandler(
+		telemetry.RequestID(telemetry.AccessLog(logger)(telemetry.Route(mux))),
+		"http.server",
+	)
 
 	srv := &http.Server{
 		Addr:    net.JoinHostPort("", strconv.Itoa(cfg.Port)),
