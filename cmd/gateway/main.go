@@ -97,10 +97,9 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 		mailer = smtpMailer
-		logger.Info("mail delivery over smtp",
-			slog.String("host", smtpMailer.Host()),
-			slog.String("from", cfg.MailFrom),
-		)
+		// Neither the relay host nor the sender address is logged: both name the
+		// operator's mail provider and domain to anyone who can read the logs.
+		logger.Info("mail delivery over smtp")
 	} else {
 		mailer = auth.LogMailer{Logger: logger, From: cfg.MailFrom}
 		logger.Warn("no SMTP_URL: verification and reset links will be written to the log, " +

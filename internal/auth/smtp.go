@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -47,7 +48,9 @@ type SMTPMailer struct {
 func NewSMTPMailer(rawURL, from string) (*SMTPMailer, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
-		return nil, fmt.Errorf("smtp url: %w", err)
+		// The parse error is dropped, not wrapped: url.Parse quotes the whole
+		// input, password included, and this error ends up in the startup log.
+		return nil, errors.New("smtp url is not a valid URL")
 	}
 
 	var implicit bool
@@ -91,9 +94,35 @@ func NewSMTPMailer(rawURL, from string) (*SMTPMailer, error) {
 	return m, nil
 }
 
-// Host is the relay this mailer talks to, for a startup log line. The URL
-// itself is never logged, because it carries the password.
-func (m *SMTPMailer) Host() string { return m.host }
+// smtpReply reduces a server refusal to its numeric code. The reply text is the
+// relay's own words and routinely quotes the recipient ("550 <a@b.c> does not
+// exist"), which would put an address in the log.
+func smtpReply(step string, err error) error {
+	var tp *textproto.Error
+	if errors.As(err, &tp) {
+		return fmt.Errorf("%s: server replied %d", step, tp.Code)
+	}
+	return fmt.Errorf("%s: %w", step, err)
+}
+
+// dialFailure names what kind of dial failure happened without the net
+// error's text, which carries the relay's host and address.
+func dialFailure(err error) error {
+	var dnsErr *net.DNSError
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("dial smtp relay: %w", context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("dial smtp relay: %w", context.DeadlineExceeded)
+	case errors.As(err, &dnsErr):
+		return errors.New("dial smtp relay: host name lookup failed")
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return errors.New("dial smtp relay: timed out")
+	default:
+		return errors.New("dial smtp relay: connection failed")
+	}
+}
 
 // Send delivers one message.
 func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
@@ -109,7 +138,7 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 	dialer := &net.Dialer{Timeout: smtpTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", m.addr)
 	if err != nil {
-		return fmt.Errorf("dial smtp %s: %w", m.addr, err)
+		return dialFailure(err)
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -130,7 +159,7 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 
 	client, err := smtp.NewClient(conn, m.host)
 	if err != nil {
-		return fmt.Errorf("smtp greeting from %s: %w", m.addr, err)
+		return smtpReply("smtp greeting", err)
 	}
 	defer func() { _ = client.Close() }()
 
@@ -147,7 +176,7 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 			// reset link and an address-confirmation link, both bearer secrets
 			// for anyone on the path. A local test relay is allowed to be
 			// plaintext because there is no path.
-			return fmt.Errorf("smtp relay %s does not offer STARTTLS", m.addr)
+			return errors.New("smtp relay does not offer STARTTLS")
 		}
 	}
 
@@ -157,10 +186,10 @@ func (m *SMTPMailer) Send(ctx context.Context, msg Message) error {
 		}
 	}
 	if err := client.Mail(m.from); err != nil {
-		return fmt.Errorf("smtp mail from: %w", err)
+		return smtpReply("smtp mail from", err)
 	}
 	if err := client.Rcpt(recipient); err != nil {
-		return fmt.Errorf("smtp rcpt to: %w", err)
+		return smtpReply("smtp rcpt to", err)
 	}
 	w, err := client.Data()
 	if err != nil {

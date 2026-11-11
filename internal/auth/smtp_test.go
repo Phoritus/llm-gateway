@@ -1,6 +1,10 @@
 package auth
 
 import (
+	"bufio"
+	"context"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -157,5 +161,95 @@ func TestIsLoopbackHost(t *testing.T) {
 		if isLoopbackHost(host) {
 			t.Errorf("isLoopbackHost(%q) = true, want false", host)
 		}
+	}
+}
+
+// The SMTP URL carries the relay password, and url.Parse echoes the whole
+// string in its errors, so an error built around it would put the password in
+// the startup log.
+func TestNewSMTPMailerErrorsDoNotLeakCredentials(t *testing.T) {
+	const password = "s3cretPW"
+	for _, raw := range []string{
+		"smtp://user:" + password + "@smtp.example.com:58x7", // invalid port
+		"smtp://user:" + password + "@smtp.example.com/\x7f", // control character
+		"smtp://user:" + password + "%zz@smtp.example.com",   // bad escape
+		"https://user:" + password + "@smtp.example.com",     // wrong scheme
+	} {
+		_, err := NewSMTPMailer(raw, "no-reply@example.com")
+		if err == nil {
+			t.Fatalf("NewSMTPMailer(%q) = nil error, want a refusal", raw)
+		}
+		if strings.Contains(err.Error(), password) {
+			t.Errorf("error leaks the password: %v", err)
+		}
+	}
+}
+
+// A relay's refusal usually quotes the recipient, and the caller logs the error.
+func TestSendErrorsDoNotLeakRecipient(t *testing.T) {
+	const recipient = "private.person@example.org"
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		r := bufio.NewReader(conn)
+		_, _ = fmt.Fprint(conn, "220 localhost ready\r\n")
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			reply := "250 OK\r\n"
+			if strings.HasPrefix(line, "RCPT") {
+				reply = "550 <" + recipient + "> mailbox does not exist\r\n"
+			}
+			_, _ = fmt.Fprint(conn, reply)
+		}
+	}()
+
+	m, err := NewSMTPMailer("smtp://"+ln.Addr().String(), "no-reply@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.Send(context.Background(), Message{To: recipient, Subject: "hi", Body: "x"})
+	if err == nil {
+		t.Fatal("Send() = nil error, want the relay's refusal")
+	}
+	if strings.Contains(err.Error(), recipient) {
+		t.Errorf("error leaks the recipient: %v", err)
+	}
+	if !strings.Contains(err.Error(), "550") {
+		t.Errorf("error = %v, want the reply code kept for diagnosis", err)
+	}
+}
+
+// A dial failure from net carries the relay's address ("dial tcp host:port"),
+// and the relay host identifies the operator's mail provider and domain.
+func TestSendDialErrorDoesNotLeakRelayAddress(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // nothing listens now, so the dial is refused
+
+	m, err := NewSMTPMailer("smtp://"+addr, "no-reply@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.Send(context.Background(), Message{To: "user@example.org", Subject: "hi", Body: "x"})
+	if err == nil {
+		t.Fatal("Send() = nil error, want a dial failure")
+	}
+	if strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("error leaks the relay address: %v", err)
 	}
 }
