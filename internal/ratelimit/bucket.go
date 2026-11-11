@@ -72,10 +72,11 @@ func New(client *redis.Client) *Limiter {
 	}
 }
 
-// AllowN spends cost tokens. A denial is counted under the scope label, so
-// scope must stay a fixed name chosen by the caller ("login:ip"), never
-// something derived from the request: it becomes a metric series. The data plane uses a cost above one to reserve
-// estimated tokens before a provider call.
+// AllowN spends cost tokens. The data plane uses a cost above one to reserve
+// estimated tokens before a provider call. A denial is counted under the
+// scope label, so scope must stay a fixed name chosen by the caller
+// ("login:ip"), never something derived from the request: each distinct
+// value becomes a metric series.
 func (l *Limiter) AllowN(ctx context.Context, scope, id string, rule Rule, cost float64) (Decision, error) {
 	if rule.Refill <= 0 || rule.Burst <= 0 {
 		return Decision{}, fmt.Errorf("ratelimit: rule for %q must have a positive burst and refill", scope)

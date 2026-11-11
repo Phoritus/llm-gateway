@@ -63,6 +63,16 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Deferred first so it runs last: after the server has drained, the last
+	// requests' spans and metrics are in what gets flushed, and an early
+	// return still flushes whatever was recorded before it.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(flushCtx); err != nil {
+			logger.Error("telemetry shutdown failed", slog.String("error", err.Error()))
+		}
+	}()
 
 	st, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -200,14 +210,6 @@ func run(logger *slog.Logger) error {
 		logger.Error("graceful shutdown timed out", slog.String("error", err.Error()))
 	}
 	stopSweeper()
-
-	// After the server has drained, so the last requests' spans and metrics
-	// are in what gets flushed.
-	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelFlush()
-	if err := shutdownTelemetry(flushCtx); err != nil {
-		logger.Error("telemetry shutdown failed", slog.String("error", err.Error()))
-	}
 	logger.Info("stopped")
 	return nil
 }
