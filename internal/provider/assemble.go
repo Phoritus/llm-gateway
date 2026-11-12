@@ -1,21 +1,33 @@
 package provider
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // maxChoices bounds the n a response may carry. OpenAI caps n at 128.
 const maxChoices = 128
+
+const maxToolCalls = 128
 
 // Assembler builds a ChatResponse from a stream's chunks as they pass. It is
 // fed chunk by chunk rather than handed a Stream so that the same chunks can
 // go to a client at the same time: a non-streaming request assembles them
 // silently, and the exact cache will assemble a streaming one while it is
 // being sent.
-//
-// Tool-call deltas are not merged yet; they arrive with the first adapter
-// that can emit them.
 type Assembler struct {
 	resp    ChatResponse
-	content []*strings.Builder
+	choices []*choiceParts
+}
+
+type choiceParts struct {
+	content strings.Builder
+	calls   []*callParts
+}
+
+type callParts struct {
+	call      ToolCall
+	arguments strings.Builder
 }
 
 func (a *Assembler) Add(c *ChatChunk) {
@@ -37,16 +49,47 @@ func (a *Assembler) Add(c *ChatChunk) {
 				Index:   len(a.resp.Choices),
 				Message: ResponseMessage{Role: "assistant"},
 			})
-			a.content = append(a.content, new(strings.Builder))
+			a.choices = append(a.choices, new(choiceParts))
 		}
 		item := &a.resp.Choices[ch.Index]
+		parts := a.choices[ch.Index]
 		if ch.Delta.Role != "" {
 			item.Message.Role = ch.Delta.Role
 		}
-		a.content[ch.Index].WriteString(ch.Delta.Content)
+		parts.content.WriteString(ch.Delta.Content)
+		parts.addToolCalls(ch.Delta.ToolCalls)
 		if ch.FinishReason != nil {
 			item.FinishReason = ch.FinishReason
 		}
+	}
+}
+
+func (p *choiceParts) addToolCalls(raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+	var deltas []ToolCallDelta
+	if json.Unmarshal(raw, &deltas) != nil {
+		return
+	}
+	for _, d := range deltas {
+		if d.Index < 0 || d.Index >= maxToolCalls {
+			continue
+		}
+		for len(p.calls) <= d.Index {
+			p.calls = append(p.calls, new(callParts))
+		}
+		c := p.calls[d.Index]
+		if d.ID != "" {
+			c.call.ID = d.ID
+		}
+		if d.Type != "" {
+			c.call.Type = d.Type
+		}
+		if d.Function.Name != "" {
+			c.call.Function.Name = d.Function.Name
+		}
+		c.arguments.WriteString(d.Function.Arguments)
 	}
 }
 
@@ -56,7 +99,19 @@ func (a *Assembler) Response() *ChatResponse {
 	out.Object = "chat.completion"
 	out.Choices = make([]ResponseItem, len(a.resp.Choices))
 	for i, item := range a.resp.Choices {
-		item.Message.Content = a.content[i].String()
+		parts := a.choices[i]
+		item.Message.Content = parts.content.String()
+		for _, c := range parts.calls {
+			if c.call.ID == "" && c.call.Function.Name == "" && c.arguments.Len() == 0 {
+				continue
+			}
+			call := c.call
+			if call.Type == "" {
+				call.Type = "function"
+			}
+			call.Function.Arguments = c.arguments.String()
+			item.Message.ToolCalls = append(item.Message.ToolCalls, call)
+		}
 		out.Choices[i] = item
 	}
 	return &out

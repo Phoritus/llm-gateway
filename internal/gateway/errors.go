@@ -63,6 +63,12 @@ func upstreamError(err error) (int, errorDetail) {
 	case errors.Is(err, provider.ErrContextTooLong):
 		return http.StatusRequestEntityTooLarge, errorDetail{Type: typeInvalidRequest, Code: "context_length_exceeded",
 			Message: "The request is longer than the model's context window."}
+	case errors.Is(err, provider.ErrInvalidRequest):
+		return http.StatusBadRequest, errorDetail{Type: typeInvalidRequest, Code: "upstream_invalid_request",
+			Message: "The upstream provider rejected the request as invalid. Check the parameters it was sent."}
+	case errors.Is(err, provider.ErrModelUnavailable):
+		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_model_unavailable",
+			Message: "The upstream provider does not offer this route's model to its credential."}
 	case errors.Is(err, provider.ErrTimeout), errors.Is(err, errDeadline):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_timeout",
 			Message: "The upstream provider did not answer in time."}

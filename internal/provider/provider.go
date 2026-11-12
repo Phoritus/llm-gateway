@@ -3,17 +3,23 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"strings"
 )
 
-// Provider is one upstream model API. Streaming is the only call: a
+// Provider is one upstream model API. Streaming is the only chat call: a
 // non-streaming request is the same stream put together by Assemble, which the
-// exact cache needs anyway, so an adapter implements one method rather than
-// two that must agree.
+// exact cache needs anyway, so an adapter implements one chat method rather
+// than two that must agree.
 type Provider interface {
 	// ChatStream starts a generation. An error here, or from the stream's
 	// first Next, happens before anything reaches the client, so the caller
 	// may still try another target.
 	ChatStream(ctx context.Context, req *ChatRequest, cred Credential) (Stream, error)
+
+	// CheckKey asks the upstream whether it accepts the credential, without
+	// generating anything.
+	CheckKey(ctx context.Context, cred Credential) error
 }
 
 // Stream yields a generation's chunks in order. Next returns io.EOF after the
@@ -35,6 +41,10 @@ type Credential struct {
 // stop, tools, tool_choice, and message content that may be a string or an
 // array of parts -- stay raw, so they pass through to an OpenAI-compatible
 // upstream unchanged without this package modelling OpenAI's whole schema.
+//
+// The fields the gateway reads are modelled; every other top-level field (n,
+// seed, response_format, penalties, logprobs, and whatever OpenAI adds next)
+// is kept in Extra and written back out, so a passthrough forwards it.
 type ChatRequest struct {
 	Model         string          `json:"model"`
 	Messages      []Message       `json:"messages"`
@@ -47,6 +57,66 @@ type ChatRequest struct {
 	Tools         json.RawMessage `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage `json:"tool_choice,omitempty"`
 	User          string          `json:"user,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+type chatRequestFields ChatRequest
+
+var modelledFields = func() []string {
+	t := reflect.TypeFor[chatRequestFields]()
+	var names []string
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
+}()
+
+func (r *ChatRequest) UnmarshalJSON(b []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, (*chatRequestFields)(r)); err != nil {
+		return err
+	}
+	// encoding/json matches field names case-insensitively, so "MODEL" was
+	// decoded into Model and must not also travel as an extra.
+	for key := range all {
+		for _, name := range modelledFields {
+			if strings.EqualFold(key, name) {
+				delete(all, key)
+				break
+			}
+		}
+	}
+	r.Extra = nil
+	if len(all) > 0 {
+		r.Extra = all
+	}
+	return nil
+}
+
+func (r ChatRequest) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(chatRequestFields(r))
+	if err != nil || len(r.Extra) == 0 {
+		return b, err
+	}
+	var modelled map[string]json.RawMessage
+	if err := json.Unmarshal(b, &modelled); err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(r.Extra)+len(modelled))
+	for k, v := range r.Extra {
+		out[k] = v
+	}
+	for k, v := range modelled {
+		out[k] = v
+	}
+	return json.Marshal(out)
 }
 
 // StreamOptions asks for a final chunk that carries usage.
@@ -130,6 +200,31 @@ type ResponseItem struct {
 }
 
 type ResponseMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// ToolCall is one call in an assistant message. In a stream it arrives in
+// pieces: a ToolCallDelta per chunk, keyed by Index, with Arguments split
+// across them.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type ToolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }

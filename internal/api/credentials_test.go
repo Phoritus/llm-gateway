@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -111,5 +112,59 @@ func TestCredentialLimitOverHTTP(t *testing.T) {
 	res := createCredential(alice, map[string]any{"provider": "groq", "secret": apiTestSecret})
 	if res.status != http.StatusConflict || res.errorCode() != "credential_limit_reached" {
 		t.Fatalf("51st: %d %s", res.status, res.raw)
+	}
+}
+
+type keyChecker struct{ valid string }
+
+func (k keyChecker) CheckKey(_ context.Context, cred provider.Credential) error {
+	if cred.APIKey == k.valid {
+		return nil
+	}
+	return &provider.Error{Kind: provider.ErrAuth}
+}
+
+func (keyChecker) ChatStream(context.Context, *provider.ChatRequest, provider.Credential) (provider.Stream, error) {
+	return nil, &provider.Error{Kind: provider.ErrUpstream}
+}
+
+func TestCredentialKeyTest(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	bob := env.signupAndLogin("bob@example.com")
+
+	idOf := func(provider, secret string) string {
+		res := createCredential(alice, map[string]any{"provider": provider, "secret": secret})
+		if res.status != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", provider, res.status, res.raw)
+		}
+		return res.body["id"].(string)
+	}
+	good := idOf("groq", apiTestSecret)
+	bad := idOf("groq", "sk-live-not-the-right-key-0000")
+	noAdapter := idOf("gemini", apiTestSecret)
+
+	for _, tc := range []struct {
+		id, code string
+		ok       bool
+	}{
+		{good, "", true},
+		{bad, "key_rejected", false},
+		{noAdapter, "provider_unavailable", false},
+	} {
+		res := alice.do(http.MethodPost, "/api/credentials/"+tc.id+"/test", nil)
+		if res.status != http.StatusOK || res.body["ok"] != tc.ok || (tc.code != "" && res.body["code"] != tc.code) {
+			t.Errorf("test %s: %d %s, want ok=%v code=%q", tc.id, res.status, res.raw, tc.ok, tc.code)
+		}
+		if strings.Contains(res.raw, apiTestSecret) {
+			t.Errorf("test response contains the secret: %s", res.raw)
+		}
+	}
+
+	if res := bob.do(http.MethodPost, "/api/credentials/"+good+"/test", nil); res.status != http.StatusNotFound {
+		t.Errorf("Bob testing Alice's credential: %d %s", res.status, res.raw)
+	}
+	if res := alice.do(http.MethodPost, "/api/credentials/not-a-uuid/test", nil); res.status != http.StatusNotFound {
+		t.Errorf("malformed id: %d %s", res.status, res.raw)
 	}
 }

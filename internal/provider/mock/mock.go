@@ -68,6 +68,11 @@ func (p *Provider) ChatStream(ctx context.Context, req *provider.ChatRequest, _ 
 	return s, nil
 }
 
+// CheckKey accepts every key: the mock has no account to check it against.
+func (p *Provider) CheckKey(ctx context.Context, _ provider.Credential) error {
+	return ctx.Err()
+}
+
 // stream sends one chunk per word, then a chunk with the finish reason, then
 // (when asked for) a chunk with usage only, as OpenAI does.
 type stream struct {
