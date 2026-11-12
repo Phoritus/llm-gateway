@@ -190,6 +190,7 @@ type stream struct {
 
 	sawFinishReason bool
 	done            bool
+	toolCallChoices map[int]bool
 }
 
 func (s *stream) Next() (*provider.ChatChunk, error) {
@@ -228,9 +229,22 @@ func (s *stream) Next() (*provider.ChatChunk, error) {
 		return nil, eventError(payload.Error)
 	}
 	chunk := payload.ChatChunk
-	for _, ch := range chunk.Choices {
+	for i := range chunk.Choices {
+		ch := &chunk.Choices[i]
+		if len(ch.Delta.ToolCalls) > 0 && string(ch.Delta.ToolCalls) != "null" {
+			if s.toolCallChoices == nil {
+				s.toolCallChoices = map[int]bool{}
+			}
+			s.toolCallChoices[ch.Index] = true
+		}
 		if ch.FinishReason != nil {
 			s.sawFinishReason = true
+			// Gemini ends a tool call with "stop", and clients run tools
+			// only on "tool_calls".
+			if *ch.FinishReason == "stop" && s.toolCallChoices[ch.Index] {
+				reason := "tool_calls"
+				ch.FinishReason = &reason
+			}
 		}
 	}
 	return &chunk, nil

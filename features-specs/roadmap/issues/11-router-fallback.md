@@ -21,3 +21,10 @@ Build-order step 5, second half.
 Spec: [Routing, fallback and quotas](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+- From ticket 08's live run: the adapter's first-byte timer is a fixed 30s
+  (`openai.Options.FirstByteTimeout`). Under load `gemini-3.8-flash` sent
+  nothing for 30s and was answered `ErrTimeout`. That is the right call while
+  failover is still legal, but a reasoning model can think longer than that
+  before its first chunk. Make it a per-route (or per-target) setting here,
+  where the router owns the attempt and its deadline.
