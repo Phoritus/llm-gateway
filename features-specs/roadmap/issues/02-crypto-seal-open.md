@@ -1,6 +1,6 @@
 # 02 internal/crypto: AES-256-GCM seal and open
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 Build-order step 3, first piece. Fill `internal/crypto` (still a `doc.go`).

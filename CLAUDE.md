@@ -17,7 +17,8 @@ adding files.
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
 | `provider`, `provider/mock` | The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
 | `gateway` | `POST /v1/chat/completions`, streaming and not, against a single provider. **Mounted only outside production**: it has no gateway keys yet |
-| `router`, `cache`, `crypto`, `usage`, `provider/openai`, `gemini`, `anthropic` | Still a one-line `doc.go` |
+| `crypto` | AES-256-GCM `Keyring`: `Seal`/`Open` with caller-supplied AAD, a key id derived from each key, older keys accepted for rotation. Not yet called: ticket 03 wires it to `config.MasterKey` |
+| `router`, `cache`, `usage`, `provider/openai`, `gemini`, `anthropic` | Still a one-line `doc.go` |
 
 Build-order steps 1 and 2 and the auth half of step 3 are done. **The work
 left is an ordered ticket list in `features-specs/roadmap/map.md`** -- read it

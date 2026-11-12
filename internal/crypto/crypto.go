@@ -1,13 +1,9 @@
-// Package crypto seals and opens provider credentials with AES-256-GCM.
-// A sealed value records which master key sealed it, so the key can be
-// rotated by re-sealing rows whose key id is not the current one.
 package crypto
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -28,10 +24,8 @@ var (
 	ErrOpen = errors.New("crypto: cannot open sealed value")
 )
 
-// KeyID names the master key a value was sealed under. It is derived from the
-// key (hex of the first 8 bytes of HMAC-SHA256(key, "llm-gateway/crypto key id v1")),
-// so it needs no config and reveals nothing usable about the key. 16 lowercase
-// hex chars; stored as a text column.
+// KeyID names the master key a value was sealed under. It is a truncated HMAC
+// of the key, so it needs no config and reveals nothing usable about the key.
 type KeyID string
 
 // Sealed is what the store persists: two columns, so the rotation job can
@@ -77,7 +71,7 @@ func newAEAD(key []byte) (KeyID, cipher.AEAD, error) {
 	if err != nil {
 		return "", nil, errors.New("invalid master key")
 	}
-	aead, err := cipher.NewGCM(block)
+	aead, err := cipher.NewGCMWithRandomNonce(block)
 	if err != nil {
 		return "", nil, errors.New("invalid master key")
 	}
@@ -91,37 +85,20 @@ func (k *Keyring) Current() KeyID { return k.current }
 
 // Seal encrypts under the current key with a fresh random nonce. aad binds the
 // value to its context, so a ciphertext copied to another row will not open.
-func (k *Keyring) Seal(plaintext, aad []byte) (Sealed, error) {
-	aead := k.aeads[k.current]
-	n := aead.NonceSize()
-	out := make([]byte, n, n+len(plaintext)+aead.Overhead())
-	if _, err := rand.Read(out); err != nil {
-		return Sealed{}, errors.New("crypto: random source failed")
-	}
-	out = aead.Seal(out, out[:n], plaintext, bind(k.current, aad))
-	return Sealed{KeyID: k.current, Ciphertext: out}, nil
+func (k *Keyring) Seal(plaintext, aad []byte) Sealed {
+	return Sealed{KeyID: k.current, Ciphertext: k.aeads[k.current].Seal(nil, nil, plaintext, aad)}
 }
 
-// Open picks the key by s.KeyID. The key id is authenticated too, so rewriting
-// it to another key the keyring holds fails rather than opens.
+// Open picks the key by s.KeyID. A rewritten id selects a different key, so
+// GCM rejects the value without the id needing to be authenticated itself.
 func (k *Keyring) Open(s Sealed, aad []byte) ([]byte, error) {
 	aead, ok := k.aeads[s.KeyID]
 	if !ok {
 		return nil, ErrUnknownKey
 	}
-	n := aead.NonceSize()
-	if len(s.Ciphertext) < n+aead.Overhead() {
-		return nil, ErrOpen
-	}
-	pt, err := aead.Open(nil, s.Ciphertext[:n], s.Ciphertext[n:], bind(s.KeyID, aad))
+	pt, err := aead.Open(nil, nil, s.Ciphertext, aad)
 	if err != nil {
 		return nil, ErrOpen
 	}
 	return pt, nil
-}
-
-// bind prefixes aad with the key id. Ids are a fixed length, so the
-// concatenation is unambiguous.
-func bind(id KeyID, aad []byte) []byte {
-	return append([]byte(id), aad...)
 }

@@ -18,15 +18,6 @@ func mustKeyring(t *testing.T, current []byte, older ...[]byte) *Keyring {
 	return k
 }
 
-func mustSeal(t *testing.T, k *Keyring, pt, aad []byte) Sealed {
-	t.Helper()
-	s, err := k.Seal(pt, aad)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
 func TestRoundTrip(t *testing.T) {
 	k := mustKeyring(t, key(1))
 	for _, tc := range []struct {
@@ -40,7 +31,7 @@ func TestRoundTrip(t *testing.T) {
 		{"binary", []byte{0, 255, 1, 2}, []byte{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := k.Open(mustSeal(t, k, tc.pt, tc.aad), tc.aad)
+			got, err := k.Open(k.Seal(tc.pt, tc.aad), tc.aad)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,7 +45,7 @@ func TestRoundTrip(t *testing.T) {
 func TestOpenRejectsTampering(t *testing.T) {
 	k := mustKeyring(t, key(1))
 	aad := []byte("ctx")
-	base := mustSeal(t, k, []byte("sk-secret"), aad)
+	base := k.Seal([]byte("sk-secret"), aad)
 	last := len(base.Ciphertext) - 1
 
 	for _, tc := range []struct {
@@ -81,7 +72,7 @@ func TestOpenRejectsTampering(t *testing.T) {
 func TestWrongKey(t *testing.T) {
 	a := mustKeyring(t, key(1))
 	b := mustKeyring(t, key(2))
-	s := mustSeal(t, a, []byte("sk-secret"), nil)
+	s := a.Seal([]byte("sk-secret"), nil)
 
 	if _, err := b.Open(s, nil); !errors.Is(err, ErrUnknownKey) {
 		t.Fatalf("different keyring: err = %v, want ErrUnknownKey", err)
@@ -94,7 +85,7 @@ func TestWrongKey(t *testing.T) {
 
 func TestRewrittenKeyIDWithinKeyringFails(t *testing.T) {
 	k := mustKeyring(t, key(1), key(2))
-	s := mustSeal(t, k, []byte("sk-secret"), nil)
+	s := k.Seal([]byte("sk-secret"), nil)
 	s.KeyID = mustKeyring(t, key(2)).Current()
 	if _, err := k.Open(s, nil); !errors.Is(err, ErrOpen) {
 		t.Fatalf("err = %v, want ErrOpen", err)
@@ -103,7 +94,7 @@ func TestRewrittenKeyIDWithinKeyringFails(t *testing.T) {
 
 func TestWrongAAD(t *testing.T) {
 	k := mustKeyring(t, key(1))
-	s := mustSeal(t, k, []byte("sk-secret"), []byte("ws1/cred1"))
+	s := k.Seal([]byte("sk-secret"), []byte("ws1/cred1"))
 	for name, aad := range map[string][]byte{
 		"other context": []byte("ws2/cred1"),
 		"nil":           nil,
@@ -118,7 +109,7 @@ func TestWrongAAD(t *testing.T) {
 func TestRotation(t *testing.T) {
 	oldRing := mustKeyring(t, key(1))
 	aad := []byte("ctx")
-	sealedOld := mustSeal(t, oldRing, []byte("sk-secret"), aad)
+	sealedOld := oldRing.Seal([]byte("sk-secret"), aad)
 
 	ring := mustKeyring(t, key(2), key(1))
 	if ring.Current() == oldRing.Current() {
@@ -128,7 +119,7 @@ func TestRotation(t *testing.T) {
 	if err != nil || string(got) != "sk-secret" {
 		t.Fatalf("open old value: %q, %v", got, err)
 	}
-	if s := mustSeal(t, ring, []byte("x"), aad); s.KeyID != ring.Current() {
+	if s := ring.Seal([]byte("x"), aad); s.KeyID != ring.Current() {
 		t.Fatalf("new seal under %s, want %s", s.KeyID, ring.Current())
 	}
 }
@@ -139,7 +130,7 @@ func TestNonceUniqueness(t *testing.T) {
 	cts := map[string]bool{}
 	const n = 1000
 	for range n {
-		s := mustSeal(t, k, []byte("same"), nil)
+		s := k.Seal([]byte("same"), nil)
 		nonces[string(s.Ciphertext[:12])] = true
 		cts[string(s.Ciphertext)] = true
 	}
