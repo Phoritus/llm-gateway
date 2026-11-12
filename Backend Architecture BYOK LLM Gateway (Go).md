@@ -62,7 +62,7 @@ type Provider interface {
 
 Adapters return typed errors (`ErrAuth`, `ErrQuota`, `ErrRateLimited`, `ErrContextTooLong`, `ErrUpstream`, `ErrTimeout`) so the router can pick a skip rule without parsing messages.
 
-**Phase 1 adapters:** most free providers (Groq, Cerebras, OpenRouter, Mistral and others) already speak the OpenAI format, so one generic OpenAI-compatible adapter with a base URL covers many of them. Gemini and Anthropic need their own adapters.
+**Phase 1 adapters:** most free providers (Groq, Cerebras, OpenRouter, Mistral and others) already speak the OpenAI format, so one generic OpenAI-compatible adapter with a base URL covers many of them. Gemini is one of them, through Google's OpenAI-compatible endpoint (`/v1beta/openai`); only its error bodies differ. Anthropic needs its own adapter.
 
 **Streaming**
 
@@ -232,7 +232,7 @@ internal/
   api/              control plane handlers
   gateway/          /v1 handlers and the request pipeline
   auth/             gateway keys, sessions, password hashing
-  provider/         adapter interface + openai, gemini, anthropic, mock
+  provider/         adapter interface + openai (Gemini included), anthropic, mock
   router/           routes, skip rules, circuit breaker, free-first
   ratelimit/        Redis token bucket and Lua script
   cache/            exact cache, semantic cache, embedding adapters
@@ -262,7 +262,7 @@ migrations/         SQL migrations
 1. Skeleton: config, Postgres and Redis connections, migrations, health endpoints, request id and logging.
 2. Mock provider plus `/v1/chat/completions` passing through with streaming. This is the first thing to demo.
 3. Gateway keys, encrypted provider credentials, routes and the control plane API.
-4. Real adapters (OpenAI-compatible first, then Gemini and Anthropic).
+4. Real adapters (OpenAI-compatible first, Gemini among them, then Anthropic).
 5. Rate limiting, then routing with fallback, skip rules and circuit breaker.
 6. Usage events, rollups and OpenTelemetry metrics. Gate A: free launch.
 7. Free-first routing and exact cache.
