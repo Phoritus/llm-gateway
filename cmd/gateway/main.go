@@ -22,6 +22,7 @@ import (
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/provider/anthropic"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/provider/openai"
 	"llm-gateway/internal/ratelimit"
@@ -147,6 +148,7 @@ func run(logger *slog.Logger) error {
 	for vendor, endpoint := range openai.Endpoints {
 		providers[vendor] = openai.New(endpoint, openai.Options{})
 	}
+	providers[provider.VendorAnthropic] = anthropic.New(anthropic.Options{})
 	if !cfg.IsProduction() {
 		providers[provider.VendorMock] = &mock.Provider{}
 	}

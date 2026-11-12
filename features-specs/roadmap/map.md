@@ -35,7 +35,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `resolved` | 04, 05 |
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `resolved` | 06 |
 | [08](issues/08-gemini-adapter.md) | Gemini, through the OpenAI-compatible adapter | `resolved` | 07 |
-| [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `ready-for-agent` | 07 |
+| [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `resolved` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `ready-for-agent` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `ready-for-agent` | 11 |
@@ -128,6 +128,20 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   compatibility layer beta. If it drops a feature a route needs, the native
   `generateContent` adapter is the fallback plan, not a default.
 
+- Ticket 09 (Anthropic adapter): raw `net/http` like the other adapters, not
+  the Go SDK, whose own retries would compete with the router's failover. The
+  HTTP plumbing (transport, first-byte timer, `callError`) is copied from
+  `provider/openai` rather than shared; extract it when a third adapter needs
+  it. It sends `anthropic-version: 2026-10-21` and never forwards
+  `temperature` or `top_p`: every current Claude model refuses non-default
+  values and that version refuses the fields outright, while OpenAI clients
+  send them by default. `max_tokens` defaults to 32000 when the client sends
+  none. `response_format` `json_schema` becomes `output_config.format`;
+  `json_object`, `n` > 1 and unknown content parts are refused before any call.
+  Thinking blocks are not forwarded to the client. A 529 overloaded is
+  `ErrUpstream`, not a rate limit: it is not the account's limit. Only the
+  bad-key answer was checked live (401 `authentication_error`); a real key
+  (ticket 19) is needed to check the version header and a full stream.
 - Ticket 10 (/v1 rate limiting): a request spends four buckets (requests and
   estimated tokens, per key and per workspace) through `ratelimit.Take`, one
   Lua call that admits all or nothing, so a refusal spends none and admission
