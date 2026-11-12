@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -20,7 +21,6 @@ const (
 	maxSecretLen      = 512
 )
 
-// credentialView is all a client ever learns about a stored key.
 type credentialView struct {
 	ID        string    `json:"id"`
 	Provider  string    `json:"provider"`
@@ -61,8 +61,8 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if utf8.RuneCountInString(name) > maxCredentialName {
-		invalidField(w, "name", "name must be at most 100 characters.")
+	if utf8.RuneCountInString(name) > maxCredentialName || strings.ContainsFunc(name, unicode.IsControl) {
+		invalidField(w, "name", "name must be at most 100 characters, with no control characters.")
 		return
 	}
 	secret := strings.TrimSpace(req.Secret)

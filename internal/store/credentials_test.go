@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"llm-gateway/internal/crypto"
@@ -172,4 +173,32 @@ func TestCredentialLimit(t *testing.T) {
 		t.Fatalf("51st create: %v", err)
 	}
 	mustCreate(t, c, other, "unaffected")
+}
+
+func TestCredentialLimitHoldsUnderConcurrentCreates(t *testing.T) {
+	st := newTestStore(t)
+	c := newTestCredentials(t, st)
+	ctx := context.Background()
+	ws := signup(t, st, "a@example.com").WorkspaceID
+
+	var wg sync.WaitGroup
+	for range 4 * maxCredentialsPerWorkspace {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.Create(ctx, ws, NewCredential{Provider: provider.VendorGroq, Secret: testSecret})
+			if err != nil && !errors.Is(err, ErrLimitReached) {
+				t.Errorf("concurrent create: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	creds, err := c.List(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(creds) != maxCredentialsPerWorkspace {
+		t.Fatalf("workspace holds %d credentials, want exactly %d", len(creds), maxCredentialsPerWorkspace)
+	}
 }

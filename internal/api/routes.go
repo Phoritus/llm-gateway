@@ -102,10 +102,6 @@ func Routes(d Deps) http.Handler {
 		// address. The gate is on the group for the same reason the rate limit
 		// is: a route added here inherits it, and a route added here having
 		// forgotten it is not a thing that can happen.
-		//
-		// Gateway keys, route aliases and usage mount here as they land, and
-		// /v1 enforces the same rule through the gateway key's workspace
-		// rather than through a session.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireVerifiedEmail(emailNotVerified))
 

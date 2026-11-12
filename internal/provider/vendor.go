@@ -1,8 +1,6 @@
 package provider
 
-// Vendor names an upstream a workspace can store a credential for. The set is
-// fixed: an arbitrary base URL is Phase 2 and needs an SSRF guard first.
-// The mock provider is deliberately not a Vendor.
+// Vendor names an upstream a workspace can store a credential for.
 type Vendor string
 
 const (

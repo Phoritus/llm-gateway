@@ -66,6 +66,8 @@ func TestCredentialValidation(t *testing.T) {
 		{"secret with a space", "secret", map[string]any{"provider": "groq", "secret": "sk-live-abcdefgh ijklmnopqrstWXYZ"}},
 		{"non-ASCII secret", "secret", map[string]any{"provider": "groq", "secret": "sk-live-abcdefghijklmnopqrsté"}},
 		{"long name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": strings.Repeat("n", 101)}},
+		{"NUL in name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": "a\u0000b"}},
+		{"newline in name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": "a\nb"}},
 	} {
 		res := createCredential(alice, tc.body)
 		errObj, _ := res.body["error"].(map[string]any)
