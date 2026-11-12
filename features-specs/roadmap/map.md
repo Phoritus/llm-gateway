@@ -34,7 +34,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `resolved` | 03 |
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `resolved` | 04, 05 |
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `resolved` | 06 |
-| [08](issues/08-gemini-adapter.md) | provider/gemini adapter | `ready-for-agent` | 07 |
+| [08](issues/08-gemini-adapter.md) | Gemini, through the OpenAI-compatible adapter | `resolved` | 07 |
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `ready-for-agent` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `ready-for-agent` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `ready-for-agent` | 07, 10 |
@@ -113,6 +113,20 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   generates nothing (OpenRouter's `/key`, since its `/models` is public),
   behind `POST /api/credentials/{id}/test`, which answers 200 with `ok` and a
   fixed `code`, never the upstream's words.
+
+- Ticket 08 (Gemini): no native adapter. Google serves Gemini over an
+  OpenAI-compatible endpoint (`generativelanguage.googleapis.com/v1beta/openai`,
+  Bearer key, streaming, tools, images, `stream_options`, `GET /models`), so
+  Gemini is one more entry in `openai.Endpoints` and `provider/gemini` is
+  deleted. Only its errors differ, and `classify` reads them: a root-level
+  array (on chat completions; `/models` answers a bare object), a bad key as a
+  400 `INVALID_ARGUMENT` recognised only by its message (`ErrAuth`; checked
+  live with a fake key), and one 429
+  `RESOURCE_EXHAUSTED` for both limits, split by the QuotaFailure's `quotaId`
+  (`PerDay` is `ErrQuota`, anything else `ErrRateLimited`), with RetryInfo's
+  `retryDelay` as the retry hint when no header gives one. Google calls the
+  compatibility layer beta. If it drops a feature a route needs, the native
+  `generateContent` adapter is the fallback plan, not a default.
 
 ## Fog
 
