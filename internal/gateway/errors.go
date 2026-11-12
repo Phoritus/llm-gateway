@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/telemetry"
 )
 
@@ -69,6 +70,9 @@ func upstreamError(err error) (int, errorDetail) {
 	case errors.Is(err, provider.ErrModelUnavailable):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_model_unavailable",
 			Message: "The upstream provider does not offer this route's model to its credential."}
+	case errors.Is(err, router.ErrNoAdapter):
+		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "provider_unavailable",
+			Message: "This route's provider is not available on this gateway."}
 	case errors.Is(err, provider.ErrTimeout), errors.Is(err, errDeadline):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_timeout",
 			Message: "The upstream provider did not answer in time."}
@@ -104,6 +108,22 @@ func (d Deps) logUpstream(r *http.Request, err error) {
 		slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
 		slog.String("error", err.Error()),
 	)
+}
+
+// logAttempts records each target that was tried and failed, whether or not
+// a later one answered.
+func (d Deps) logAttempts(r *http.Request, steps []router.Step) {
+	for _, s := range steps {
+		if s.Err == nil {
+			continue
+		}
+		d.logger().WarnContext(r.Context(), "upstream attempt failed",
+			slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
+			slog.String("vendor", string(s.Vendor)),
+			slog.String("outcome", string(s.Outcome)),
+			slog.String("error", s.Err.Error()),
+		)
+	}
 }
 
 // retryAfterSeconds is at least one, so a client never reads "retry now".

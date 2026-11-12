@@ -20,6 +20,7 @@ import (
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
@@ -47,20 +48,27 @@ func (fakeKeys) Authenticate(_ context.Context, token string) (store.ActiveGatew
 
 type fakeRoutes struct{}
 
+// ResolveRoute reads the chain out of the alias: each comma-separated model is
+// one target. Every target has a credential of its own, so that a skip placed
+// on one credential says nothing about the next target.
 func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*store.ResolvedRoute, error) {
 	if workspaceID != "ws1" || alias == missingAlias {
 		return nil, store.ErrNotFound
 	}
-	vendor := provider.VendorMock
-	if alias == renamedAlias {
-		alias = mock.ModelEcho
+	route := &store.ResolvedRoute{ID: "r1", MaxHops: 3}
+	for _, model := range strings.Split(alias, ",") {
+		vendor := provider.VendorMock
+		if model == renamedAlias {
+			model = mock.ModelEcho
+		}
+		if rest, ok := strings.CutPrefix(model, adapterlessPrefix); ok {
+			vendor, model = provider.VendorOpenAI, rest
+		}
+		route.Targets = append(route.Targets, store.ResolvedTarget{
+			CredentialID: "c-" + model, Vendor: vendor, Model: model, Secret: testSecret,
+		})
 	}
-	if model, ok := strings.CutPrefix(alias, adapterlessPrefix); ok {
-		vendor, alias = provider.VendorOpenAI, model
-	}
-	return &store.ResolvedRoute{ID: "r1", MaxHops: 3, Targets: []store.ResolvedTarget{
-		{CredentialID: "c1", Vendor: vendor, Model: alias, Secret: testSecret},
-	}}, nil
+	return route, nil
 }
 
 // roomy is a limit no test reaches unless it sets a tighter one.
@@ -71,6 +79,7 @@ func deps(p provider.Provider, timeout time.Duration) Deps {
 		Keys:      fakeKeys{},
 		Routes:    fakeRoutes{},
 		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: p},
+		Router:    router.New(router.NewMemory(), nil),
 		Timeout:   timeout,
 		Limiter:   ratelimit.NewLocal(),
 		Limits: Limits{
@@ -218,9 +227,15 @@ func TestUpstreamFailuresBeforeTheFirstByteAreStatuses(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The wait a client is told is the one the gateway will hold it to. The mock
+// asks for 7s, but its credential is then skipped for 90.
+func TestARateLimitedRouteSaysWhenItsCredentialIsTriedAgain(t *testing.T) {
+	srv := newServer(t, &mock.Provider{}, time.Minute)
 	resp := post(t, srv, chatBody("mock/rate-limited", true))
-	if got := resp.Header.Get("Retry-After"); got != "7" {
-		t.Errorf("Retry-After = %q, want 7", got)
+	if got := resp.Header.Get("Retry-After"); got != "90" {
+		t.Errorf("Retry-After = %q, want 90", got)
 	}
 }
 
@@ -254,6 +269,9 @@ func TestDeadlineIsAnsweredAsATimeout(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusBadGateway || errorCode(t, body) != "upstream_timeout" {
 		t.Fatalf("status = %d body = %s, want 502 upstream_timeout", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("X-Fallback-Trail"); got != "mock/mock/slow=timeout" {
+		t.Errorf("X-Fallback-Trail = %q, want the target the deadline passed on", got)
 	}
 }
 

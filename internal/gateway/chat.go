@@ -6,15 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
-	"llm-gateway/internal/telemetry"
 )
 
 // errDeadline marks the request's own deadline passing, as opposed to the
@@ -31,9 +31,9 @@ const writeGrace = 2 * time.Second
 //
 // The point of no return is the first chunk, not the call. The upstream's
 // first chunk is read before any header is written, so an upstream that
-// accepts the request and then fails at once is still answered with a status
-// -- and, once routing lands, can still fail over. After that byte, a failure
-// can only end the stream with an error event.
+// accepts the request and then fails at once can still be failed over from,
+// and when every target fails is still answered with a status. After that
+// byte, a failure can only end the stream with an error event.
 //
 // The deadline is also put on the socket. A context only stops code that looks
 // at it, and a handler blocked reading a body the client is dripping, or
@@ -97,39 +97,18 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := route.Targets[0]
-	adapter, ok := d.Providers[target.Vendor]
-	if !ok {
-		d.logger().WarnContext(ctx, "no adapter for vendor",
-			slog.String("request_id", telemetry.RequestIDFrom(ctx)),
-			slog.String("vendor", string(target.Vendor)))
-		writeError(w, http.StatusBadGateway, typeServer, "provider_unavailable",
-			"This route's provider is not available on this gateway.")
+	res, err := d.Router.Run(ctx, route, d.attempt(req))
+	if err != nil && clientGone(ctx) {
 		return
 	}
-
-	upstream := *req
-	upstream.Model = target.Model
-	// Usage is always asked for, whatever the client asked: it is what the
-	// token reservation is reconciled against, and what a non-streaming
-	// answer reports.
-	upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
-
-	stream, err := adapter.ChatStream(ctx, &upstream, provider.Credential{APIKey: target.Secret})
+	d.logAttempts(r, res.Steps)
+	setFallbackHeaders(w.Header(), res)
 	if err != nil {
-		d.failBeforeFirstByte(w, r, err)
+		d.writeUpstreamError(w, r, withDeadline(ctx, err))
 		return
 	}
+	stream, first := res.Stream, res.First
 	defer stream.Close()
-
-	first, err := stream.Next()
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			err = &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before its first chunk"}
-		}
-		d.failBeforeFirstByte(w, r, err)
-		return
-	}
 	cost.observe(first)
 
 	if req.Stream {
@@ -154,6 +133,55 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		a.Add(chunk)
 	}
 	writeJSON(w, http.StatusOK, a.Response())
+}
+
+// attempt is one call to one target: the stream opened and its first chunk
+// read, which is as far as failover can still happen.
+func (d Deps) attempt(req *provider.ChatRequest) router.Attempt {
+	return func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+		adapter, ok := d.Providers[t.Vendor]
+		if !ok {
+			return nil, nil, router.ErrNoAdapter
+		}
+		upstream := *req
+		upstream.Model = t.Model
+		// Usage is always asked for, whatever the client asked: it is what the
+		// token reservation is reconciled against, and what a non-streaming
+		// answer reports.
+		upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
+
+		stream, err := adapter.ChatStream(ctx, &upstream, provider.Credential{APIKey: t.Secret})
+		if err != nil {
+			return nil, nil, err
+		}
+		first, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			err = &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before its first chunk"}
+		}
+		return stream, first, err
+	}
+}
+
+// setFallbackHeaders tells the client which targets its request went
+// through, as vendor/model=outcome in the order they were considered.
+func setFallbackHeaders(h http.Header, res router.Result) {
+	trail := make([]string, len(res.Steps))
+	for i, s := range res.Steps {
+		trail[i] = string(s.Vendor) + "/" + headerSafe(s.Model) + "=" + string(s.Outcome)
+	}
+	h.Set("X-Fallback-Attempts", strconv.Itoa(res.Attempts()))
+	h.Set("X-Fallback-Trail", strings.Join(trail, ", "))
+}
+
+// headerSafe drops what a header value cannot carry. A model name is
+// whatever the workspace typed into its route.
+func headerSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < ' ' || r > '~' {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // streamResponse sends the chunks as server-sent events, flushing each one.
