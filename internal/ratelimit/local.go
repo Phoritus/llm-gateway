@@ -1,0 +1,100 @@
+package ratelimit
+
+import (
+	"context"
+	"math"
+	"sync"
+	"time"
+)
+
+// localSweepEvery is how often Local drops the buckets nobody has touched for
+// their TTL. Redis expires its keys itself; here a call does it on the way in.
+const localSweepEvery = time.Minute
+
+// Local is an in-process limiter with the semantics of Limiter's Take and
+// Settle. It is what the data plane falls back to when Redis is unreachable,
+// and it is per instance: two instances each hand out a full allowance.
+type Local struct {
+	mu        sync.Mutex
+	buckets   map[localKey]localBucket
+	nextSweep time.Time
+	now       func() time.Time
+}
+
+type localKey struct{ scope, id string }
+
+type localBucket struct {
+	tokens  float64
+	at      time.Time
+	expires time.Time
+}
+
+func NewLocal() *Local {
+	return &Local{buckets: map[localKey]localBucket{}, now: time.Now}
+}
+
+// Take is Limiter.Take against this process's buckets.
+func (l *Local) Take(ctx context.Context, buckets []Bucket) (Result, error) {
+	if err := checkRules(buckets); err != nil {
+		return Result{}, err
+	}
+	res, refused := l.run(buckets, false)
+	countRejections(ctx, buckets, refused)
+	return res, nil
+}
+
+// Settle is Limiter.Settle against this process's buckets.
+func (l *Local) Settle(_ context.Context, buckets []Bucket) error {
+	if err := checkRules(buckets); err != nil {
+		return err
+	}
+	l.run(buckets, true)
+	return nil
+}
+
+// run mirrors take.lua step for step; the tests hold the two to one table.
+func (l *Local) run(buckets []Bucket, force bool) (Result, []bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	l.sweep(now)
+
+	res := Result{Allowed: true, Remaining: make([]float64, len(buckets))}
+	refused := make([]bool, len(buckets))
+	for i, b := range buckets {
+		have := b.Rule.Burst
+		if state, ok := l.buckets[localKey{b.Scope, b.ID}]; ok {
+			elapsed := max(0, now.Sub(state.at).Seconds())
+			have = min(b.Rule.Burst, state.tokens+elapsed*b.Rule.Refill)
+		}
+		res.Remaining[i] = have
+		if cost := b.spend(force); !force && have < cost {
+			res.Allowed, refused[i] = false, true
+			wait := time.Duration(math.Ceil((cost-have)/b.Rule.Refill*1000)) * time.Millisecond
+			res.RetryAfter = max(res.RetryAfter, wait)
+		}
+	}
+	if !res.Allowed {
+		return res, refused
+	}
+
+	for i, b := range buckets {
+		left := max(-b.Rule.Burst, min(b.Rule.Burst, res.Remaining[i]-b.spend(force)))
+		l.buckets[localKey{b.Scope, b.ID}] = localBucket{tokens: left, at: now, expires: now.Add(b.Rule.ttl())}
+		res.Remaining[i] = left
+	}
+	return res, refused
+}
+
+func (l *Local) sweep(now time.Time) {
+	if now.Before(l.nextSweep) {
+		return
+	}
+	l.nextSweep = now.Add(localSweepEvery)
+	for key, state := range l.buckets {
+		if !now.Before(state.expires) {
+			delete(l.buckets, key)
+		}
+	}
+}

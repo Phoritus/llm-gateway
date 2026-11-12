@@ -207,6 +207,15 @@ func newTestEnv(t *testing.T) *testEnv {
 		Routes:    deps.Credentials,
 		Providers: deps.Providers,
 		Timeout:   time.Minute,
+		Limiter:   ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
+		Limits: gateway.Limits{
+			KeyRequests:          ratelimit.PerMinute(120),
+			KeyTokens:            ratelimit.PerMinute(200_000),
+			WorkspaceRequests:    ratelimit.PerMinute(300),
+			WorkspaceTokens:      ratelimit.PerMinute(500_000),
+			WorkspaceConcurrency: 20,
+		},
+		ClientKey: authSvc.RateLimitKey,
 		Logger:    deps.Logger,
 	})))
 

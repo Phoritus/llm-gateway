@@ -1,6 +1,6 @@
 # 10 Rate limiting on /v1: reserve, then reconcile
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06
 
 Build-order step 5, first half. `internal/ratelimit` already exists and is

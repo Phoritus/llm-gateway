@@ -19,6 +19,7 @@ import (
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
+	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
@@ -62,12 +63,25 @@ func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*s
 	}}, nil
 }
 
+// roomy is a limit no test reaches unless it sets a tighter one.
+var roomy = ratelimit.PerMinute(1e9)
+
 func deps(p provider.Provider, timeout time.Duration) Deps {
 	return Deps{
 		Keys:      fakeKeys{},
 		Routes:    fakeRoutes{},
 		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: p},
 		Timeout:   timeout,
+		Limiter:   ratelimit.NewLocal(),
+		Limits: Limits{
+			KeyRequests: roomy, KeyTokens: roomy,
+			WorkspaceRequests: roomy, WorkspaceTokens: roomy,
+			WorkspaceConcurrency: 1000,
+		},
+		ClientKey: func(r *http.Request) string {
+			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			return host
+		},
 	}
 }
 

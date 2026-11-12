@@ -73,10 +73,20 @@ type Config struct {
 	// V1RequestTimeout is the deadline on one /v1 request, streaming included.
 	// It bounds what an abandoned or stuck generation can cost.
 	V1RequestTimeout time.Duration
-	CookieDomain     string
-	TrustedProxies   []netip.Prefix
-	MailFrom         string
-	PublicBaseURL    string
+	// The /v1 limits, per minute: requests and estimated tokens, for one
+	// gateway key and for the whole workspace. The key's are the smaller so
+	// that one key cannot spend the workspace's entire allowance.
+	V1KeyRPM       int
+	V1KeyTPM       int
+	V1WorkspaceRPM int
+	V1WorkspaceTPM int
+	// V1WorkspaceConcurrency caps a workspace's requests in flight on one
+	// instance. Long streams are what exhaust memory first.
+	V1WorkspaceConcurrency int
+	CookieDomain           string
+	TrustedProxies         []netip.Prefix
+	MailFrom               string
+	PublicBaseURL          string
 	// SMTPURL is the relay verification and reset mail goes through, as
 	// smtp://user:pass@host:587 or smtps://user:pass@host:465. Empty is
 	// allowed only outside production, where mail goes to the log instead.
@@ -240,6 +250,23 @@ func Load() (*Config, error) {
 	} else {
 		cfg.V1RequestTimeout = d
 	}
+	for _, limit := range []struct {
+		key      string
+		fallback int
+		field    *int
+	}{
+		{"V1_KEY_RPM", 120, &cfg.V1KeyRPM},
+		{"V1_KEY_TPM", 200_000, &cfg.V1KeyTPM},
+		{"V1_WORKSPACE_RPM", 300, &cfg.V1WorkspaceRPM},
+		{"V1_WORKSPACE_TPM", 500_000, &cfg.V1WorkspaceTPM},
+		{"V1_WORKSPACE_CONCURRENCY", 20, &cfg.V1WorkspaceConcurrency},
+	} {
+		if n, err := positiveIntOr(limit.key, limit.fallback); err != nil {
+			fail("%v", err)
+		} else {
+			*limit.field = n
+		}
+	}
 
 	// Mail is load-bearing, not decorative: an account cannot be used until its
 	// address is confirmed, so a deployment that cannot send is a deployment
@@ -389,6 +416,21 @@ func durationOr(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be positive, got %s", key, d)
 	}
 	return d, nil
+}
+
+func positiveIntOr(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a whole number: %v", key, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%s must be positive, got %d", key, n)
+	}
+	return n, nil
 }
 
 // boolOr reads the on/off spelling the .env.example file uses alongside the

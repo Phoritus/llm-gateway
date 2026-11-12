@@ -53,12 +53,13 @@ type Decision struct {
 	RetryAfter time.Duration
 }
 
-// Limiter is a Redis-backed token bucket shared by every instance. The same
-// limiter serves the control plane's auth endpoints now and the data plane's
-// per-key and per-workspace limits later.
+// Limiter is a Redis-backed token bucket shared by every instance. AllowN
+// serves the control plane's auth endpoints, one bucket a call; Take and
+// Settle serve the data plane, which spends several buckets at once.
 type Limiter struct {
 	client *redis.Client
 	script *redis.Script
+	take   *redis.Script
 	prefix string
 }
 
@@ -68,6 +69,7 @@ func New(client *redis.Client) *Limiter {
 	return &Limiter{
 		client: client,
 		script: redis.NewScript(bucketScript),
+		take:   redis.NewScript(takeScript),
 		prefix: "rl",
 	}
 }

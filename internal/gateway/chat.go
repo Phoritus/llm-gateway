@@ -55,7 +55,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := decodeChatRequest(w, r)
+	req, bodyBytes, ok := decodeChatRequest(w, r)
 	if !ok {
 		return
 	}
@@ -64,6 +64,24 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// still be told to the client. net/http clears the deadline after the
 	// request, so it does not carry over to the next one on the connection.
 	_ = rc.SetWriteDeadline(deadline.Add(writeGrace))
+
+	// The slot is taken before the buckets so that a full workspace is turned
+	// away with nothing reserved, and so nothing to give back.
+	release, ok := d.inflight.acquire(key.WorkspaceID, d.Limits.WorkspaceConcurrency)
+	if !ok {
+		tooManyConcurrentRequests(w)
+		return
+	}
+	defer release()
+
+	// The limits come before the route is resolved: resolving it is a
+	// Postgres query, and a key past its limit should not get to make one.
+	reserved, ok := d.reserve(w, r, key, estimateTokens(bodyBytes))
+	if !ok {
+		return
+	}
+	var cost spent
+	defer func() { d.settle(ctx, reserved, &cost) }()
 
 	route, err := d.Routes.ResolveRoute(ctx, key.WorkspaceID, req.Model)
 	if errors.Is(err, store.ErrNotFound) {
@@ -92,10 +110,10 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	upstream := *req
 	upstream.Model = target.Model
-	if !req.Stream {
-		// A non-streaming answer reports usage, so ask the stream for it.
-		upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
-	}
+	// Usage is always asked for, whatever the client asked: it is what the
+	// token reservation is reconciled against, and what a non-streaming
+	// answer reports.
+	upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
 
 	stream, err := adapter.ChatStream(ctx, &upstream, provider.Credential{APIKey: target.Secret})
 	if err != nil {
@@ -112,9 +130,11 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		d.failBeforeFirstByte(w, r, err)
 		return
 	}
+	cost.observe(first)
 
 	if req.Stream {
-		d.streamResponse(w, r, stream, first)
+		wantsUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		d.streamResponse(w, r, stream, first, &cost, wantsUsage)
 		return
 	}
 
@@ -130,13 +150,18 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			d.failBeforeFirstByte(w, r, err)
 			return
 		}
+		cost.observe(chunk)
 		a.Add(chunk)
 	}
 	writeJSON(w, http.StatusOK, a.Response())
 }
 
 // streamResponse sends the chunks as server-sent events, flushing each one.
-func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk) {
+//
+// The upstream is always asked for usage. A client that did not ask is shown
+// the stream it would have had without it: no usage-only chunk, and no usage
+// field on any other.
+func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk, cost *spent, wantsUsage bool) {
 	ctx := r.Context()
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -153,6 +178,14 @@ func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream prov
 		return rc.Flush() == nil
 	}
 	sendChunk := func(c *provider.ChatChunk) bool {
+		if c.Usage != nil && !wantsUsage {
+			if len(c.Choices) == 0 {
+				return true
+			}
+			withoutUsage := *c
+			withoutUsage.Usage = nil
+			c = &withoutUsage
+		}
 		b, err := json.Marshal(c)
 		return err == nil && send(b)
 	}
@@ -177,6 +210,7 @@ func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream prov
 			send(b)
 			return
 		}
+		cost.observe(chunk)
 		if !sendChunk(chunk) {
 			return
 		}
@@ -210,15 +244,16 @@ func withDeadline(ctx context.Context, err error) error {
 
 // decodeChatRequest reads and validates the body. Unknown fields are
 // accepted: OpenAI clients send many this gateway has no use for, and
-// refusing them would break every SDK.
-func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRequest, bool) {
+// refusing them would break every SDK. The body's length is returned with
+// the request, as the basis of the token estimate.
+func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRequest, int, bool) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, typeInvalidRequest, "body_too_large",
 				"The request body is too large.")
-			return nil, false
+			return nil, 0, false
 		}
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			// Without this, net/http reads the rest of the promised body before
@@ -226,39 +261,39 @@ func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRe
 			w.Header().Set("Connection", "close")
 			writeError(w, http.StatusRequestTimeout, typeInvalidRequest, "request_timeout",
 				"The request body was not received in time.")
-			return nil, false
+			return nil, 0, false
 		}
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_body",
 			"The request body could not be read.")
-		return nil, false
+		return nil, 0, false
 	}
 
 	var req provider.ChatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_json",
 			"The request body must be a JSON object in the chat completions format.")
-		return nil, false
+		return nil, 0, false
 	}
 	if strings.TrimSpace(req.Model) == "" {
 		invalidField(w, "model", "model is required.")
-		return nil, false
+		return nil, 0, false
 	}
 	if len(req.Messages) == 0 {
 		invalidField(w, "messages", "messages must contain at least one message.")
-		return nil, false
+		return nil, 0, false
 	}
 	for _, m := range req.Messages {
 		if !knownRoles[m.Role] {
 			invalidField(w, "messages",
 				"Every message needs a role of system, developer, user, assistant or tool.")
-			return nil, false
+			return nil, 0, false
 		}
 		if !contentShapeOK(m.Content) {
 			invalidField(w, "messages", "A message's content must be a string, an array of parts, or null.")
-			return nil, false
+			return nil, 0, false
 		}
 	}
-	return &req, true
+	return &req, len(body), true
 }
 
 // knownRoles are the roles OpenAI's chat format defines. "function" is the

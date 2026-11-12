@@ -153,6 +153,8 @@ func run(logger *slog.Logger) error {
 		providers[provider.VendorMock] = &mock.Provider{}
 	}
 
+	limiter := ratelimit.New(rdb)
+
 	deps := api.Deps{
 		Config:      cfg,
 		Store:       st,
@@ -160,7 +162,7 @@ func run(logger *slog.Logger) error {
 		Providers:   providers,
 		GatewayKeys: gatewayKeys,
 		Auth:        authSvc,
-		Limiter:     ratelimit.New(rdb),
+		Limiter:     limiter,
 		Mailer:      mailer,
 		Logger:      logger,
 	}
@@ -168,8 +170,9 @@ func run(logger *slog.Logger) error {
 	mux := http.NewServeMux()
 	// Readiness reports on what this process needs to serve a request, and the
 	// list is written here because this is where those clients are opened.
-	// Redis counts: rate limiting refuses requests when it is unavailable, so an
-	// instance without it cannot serve a login.
+	// Redis counts: the control plane's rate limiting refuses requests when it
+	// is unavailable, so an instance without it cannot serve a login. /v1 keeps
+	// answering through its in-process limiter until the instance is dropped.
 	checks := []api.Check{
 		{Name: "postgres", Ping: st.Ping},
 		{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
@@ -190,6 +193,15 @@ func run(logger *slog.Logger) error {
 		Routes:    deps.Credentials,
 		Providers: providers,
 		Timeout:   cfg.V1RequestTimeout,
+		Limiter:   ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger),
+		Limits: gateway.Limits{
+			KeyRequests:          ratelimit.PerMinute(float64(cfg.V1KeyRPM)),
+			KeyTokens:            ratelimit.PerMinute(float64(cfg.V1KeyTPM)),
+			WorkspaceRequests:    ratelimit.PerMinute(float64(cfg.V1WorkspaceRPM)),
+			WorkspaceTokens:      ratelimit.PerMinute(float64(cfg.V1WorkspaceTPM)),
+			WorkspaceConcurrency: cfg.V1WorkspaceConcurrency,
+		},
+		ClientKey: authSvc.RateLimitKey,
 		Logger:    logger,
 	})))
 

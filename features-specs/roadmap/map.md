@@ -36,7 +36,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `resolved` | 06 |
 | [08](issues/08-gemini-adapter.md) | Gemini, through the OpenAI-compatible adapter | `resolved` | 07 |
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `resolved` | 07 |
-| [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `ready-for-agent` | 06 |
+| [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `ready-for-agent` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `ready-for-agent` | 11 |
 | [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
@@ -142,7 +142,27 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   `ErrUpstream`, not a rate limit: it is not the account's limit. Only the
   bad-key answer was checked live (401 `authentication_error`); a real key
   (ticket 19) is needed to check the version header and a full stream.
+- Ticket 10 (/v1 rate limiting): a request spends four buckets (requests and
+  estimated tokens, per key and per workspace) through `ratelimit.Take`, one
+  Lua call that admits all or nothing, so a refusal spends none and admission
+  is one round trip. The estimate is the body's bytes over four, prompt only;
+  a cost above a bucket's burst is clamped so it can be admitted. After the
+  response, `Settle` corrects the token buckets to the reported usage in a
+  goroutine: a refund when the upstream failed before its first chunk, the
+  reservation kept when a generation broke without reporting. Debt is floored
+  at minus the burst. Usage is always asked of the upstream and hidden from a
+  client that did not ask. Redis down: /v1 fails open to `ratelimit.Local`
+  and skips Redis for 5s after an error, because these limits guard the
+  workspace's own provider budget; the control plane still fails closed. The
+  limit runs before route resolution, which is a Postgres query. In-flight
+  requests per workspace are capped per instance. Failed authentications cost
+  one per IP (30 a minute); once that refuses, the IP is blocked in process
+  until the bucket's Retry-After, so a flood of unknown keys stops reaching
+  Postgres. A blocked IP is refused even with a valid key, so one bad client
+  behind a shared NAT can cost its neighbours a couple of seconds at a time.
+  `take.lua` touches several keys at once, fine on one Redis node and on
+  Upstash, but a Redis Cluster would need hash tags in the key format.
 
 ## Fog
 
-- Whether /v1 rate limiting fails open or closed when Redis is down (ticket 10).
+- None open.
