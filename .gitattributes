@@ -16,3 +16,6 @@ Dockerfile text eol=lf
 
 # A recipe line is passed to the shell as-is.
 Makefile text eol=lf
+
+# `gofmt -l` lists a CRLF file as unformatted, which fails `make check`.
+*.go text eol=lf

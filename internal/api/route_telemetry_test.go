@@ -26,7 +26,10 @@ func instrumented(t *testing.T, api http.Handler) (http.Handler, *sdkmetric.Manu
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	recorder := tracetest.NewSpanRecorder()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	// The default sampler comes from OTEL_TRACES_SAMPLER, and scripts/test.sh
+	// exports .env.dev, whose ratio sampler would drop the spans asserted on.
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()))
 
 	mux := http.NewServeMux()
 	Health(nil)(mux)
