@@ -258,17 +258,15 @@ func statusError(resp *http.Response) *provider.Error {
 // code is a string at OpenAI and a number at OpenRouter, and either may be
 // absent.
 //
-// Google adds a status and typed details, and wraps the object in an array.
+// Google adds details and wraps the object in an array.
 type errorFields struct {
 	Message string          `json:"message"`
 	Type    string          `json:"type"`
 	Code    json.RawMessage `json:"code"`
-	Status  string          `json:"status"`
 	Details []googleDetail  `json:"details"`
 }
 
 type googleDetail struct {
-	Type       string `json:"@type"`
 	Reason     string `json:"reason"`
 	RetryDelay string `json:"retryDelay"` // a protobuf Duration such as "37s"
 	Violations []struct {
@@ -289,9 +287,16 @@ func (f errorFields) dailyQuotaExhausted() bool {
 	return false
 }
 
-func (f errorFields) hasReason(reason string) bool {
+// badGoogleKey recognises Google refusing the key, which it answers with a
+// 400. The OpenAI-compatible endpoint says so only in the message; the native
+// API adds an API_KEY_INVALID reason.
+func (f errorFields) badGoogleKey() bool {
+	m := strings.ToLower(f.Message)
+	if strings.Contains(m, "pass a valid api key") || strings.Contains(m, "api key not valid") {
+		return true
+	}
 	for _, d := range f.Details {
-		if d.Reason == reason {
+		if d.Reason == "API_KEY_INVALID" {
 			return true
 		}
 	}
@@ -347,7 +352,7 @@ func classify(status int, parsed errorFields, detail string) *provider.Error {
 		return kind(provider.ErrContextTooLong)
 	case code == "insufficient_quota":
 		return kind(provider.ErrQuota)
-	case parsed.hasReason("API_KEY_INVALID"):
+	case parsed.badGoogleKey():
 		return kind(provider.ErrAuth)
 	case status == http.StatusTooManyRequests && parsed.dailyQuotaExhausted():
 		return kind(provider.ErrQuota)

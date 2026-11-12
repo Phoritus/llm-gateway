@@ -167,7 +167,8 @@ func TestClassifiesUpstreamRefusals(t *testing.T) {
 		{"gemini per-minute", 429, nil, geminiRateLimit("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"), provider.ErrRateLimited, 37 * time.Second},
 		{"gemini per-day", 429, nil, geminiRateLimit("GenerateRequestsPerDayPerProjectPerModel-FreeTier"), provider.ErrQuota, 0},
 		{"gemini retry header wins", 429, http.Header{"Retry-After": {"5"}}, geminiRateLimit("PerMinute"), provider.ErrRateLimited, 5 * time.Second},
-		{"gemini bad key", 400, nil, `[{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}]`, provider.ErrAuth, 0},
+		{"gemini bad key", 400, nil, `[{"error":{"code":400,"message":"Please pass a valid API key","status":"INVALID_ARGUMENT"}}]`, provider.ErrAuth, 0},
+		{"gemini native bad key", 400, nil, `[{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}]`, provider.ErrAuth, 0},
 		{"gemini context", 400, nil, `[{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}]`, provider.ErrContextTooLong, 0},
 		{"gemini bad argument", 400, nil, `[{"error":{"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}}]`, provider.ErrInvalidRequest, 0},
 		{"gateway timeout", 504, nil, `upstream timed out`, provider.ErrTimeout, 0},
@@ -348,7 +349,7 @@ func TestCheckKey(t *testing.T) {
 func TestCheckKeyTakesGoogleBadKeyAsAuth(t *testing.T) {
 	srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`[{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}]`))
+		w.Write([]byte(`{"error":{"code":400,"message":"Please pass a valid API key","status":"INVALID_ARGUMENT"}}`))
 	})
 	p := newProvider(srv, Endpoint{}, Options{})
 	if err := p.CheckKey(context.Background(), provider.Credential{APIKey: testKey}); !errors.Is(err, provider.ErrAuth) {
