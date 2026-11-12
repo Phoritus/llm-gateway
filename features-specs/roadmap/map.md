@@ -33,7 +33,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `resolved` | 01 |
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `resolved` | 03 |
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `resolved` | 04, 05 |
-| [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `ready-for-agent` | 06 |
+| [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `resolved` | 06 |
 | [08](issues/08-gemini-adapter.md) | provider/gemini adapter | `ready-for-agent` | 07 |
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `ready-for-agent` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `ready-for-agent` | 06 |
@@ -99,6 +99,20 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   the workspace owner's, joined into the key lookup and cached with the key
   for its 1 second. No IP limit or negative cache in front of key lookup yet:
   a miss is one unique-index lookup, and ticket 10 owns /v1 limiting.
+
+- Ticket 07 (OpenAI-compatible adapter): one `openai.Provider` per vendor in
+  `openai.Endpoints` (OpenAI, Groq, Cerebras, OpenRouter, Mistral), each with
+  its own `http.Client` (5s dial and TLS, no redirects followed) and a 30s
+  first-byte timer that stops at the first data event, so a stalled upstream
+  is `ErrTimeout` while failover is still legal. SSE framing lives in
+  `provider/sse` for the Gemini and Anthropic adapters to share. Two new
+  kinds: `ErrInvalidRequest` (upstream 400/422, answered 400) and
+  `ErrModelUnavailable` (403/404, the router's "skip that model on that
+  credential"). `ChatRequest.Extra` carries every top-level field it does not
+  model through to the upstream. `Provider` gained `CheckKey`, a GET that
+  generates nothing (OpenRouter's `/key`, since its `/models` is public),
+  behind `POST /api/credentials/{id}/test`, which answers 200 with `ok` and a
+  fixed `code`, never the upstream's words.
 
 ## Fog
 

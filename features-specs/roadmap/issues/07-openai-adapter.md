@@ -1,6 +1,6 @@
 # 07 provider/openai: OpenAI-compatible adapter with a base URL
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06
 
 Build-order step 4, first adapter; it covers Groq, Cerebras, OpenRouter and
@@ -27,3 +27,17 @@ Verify against the mock first, then with a real free key (ticket 19).
 Spec: [Provider adapters and streaming](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+Resolved. Built against an httptest upstream; each vendor's key check was
+probed with a bogus key (all five answer 401). Still unverified until ticket 19
+supplies real keys: a successful stream from each vendor, and Mistral refusing
+`stream_options` (the endpoint drops it on that belief).
+
+Left open, smaller than a ticket each:
+
+- Response fidelity. Chunks are decoded into `provider.ChatChunk` and
+  re-encoded, so fields it does not model (`logprobs`, `system_fingerprint`,
+  Groq's `x_groq`, reasoning deltas) are dropped on the way back. A client
+  that sends `logprobs: true` now reaches the upstream but gets none back.
+- Message-level unknown fields (beyond `content`, which stays raw) are dropped
+  on the way in.
