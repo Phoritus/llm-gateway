@@ -1,5 +1,5 @@
 // Command gateway runs the BYOK LLM gateway: the control plane under /api and
-// (later) the OpenAI-compatible data plane under /v1.
+// the OpenAI-compatible data plane under /v1.
 package main
 
 import (
@@ -19,6 +19,8 @@ import (
 	"llm-gateway/internal/api"
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
+	"llm-gateway/internal/gateway"
+	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -159,6 +161,17 @@ func run(logger *slog.Logger) error {
 		}
 	}
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
+
+	// /v1 has no gateway keys until build-order step 3, so outside development
+	// it would be an open endpoint. It serves only the mock provider meanwhile.
+	if !cfg.IsProduction() {
+		mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
+			Provider: &mock.Provider{},
+			Timeout:  cfg.V1RequestTimeout,
+			Logger:   logger,
+		})))
+		logger.Warn("/v1 is serving the mock provider without authentication (development only)")
+	}
 
 	// otelhttp is outermost so the span exists when the access log reads its
 	// trace id. Route sits next to the mux because it needs the request the

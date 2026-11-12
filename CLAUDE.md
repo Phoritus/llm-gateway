@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-The skeleton and the control plane's authentication are implemented; the data
-plane is not. Read a package's `doc.go` to learn what belongs in it before
+The skeleton, the control plane's authentication, and a mock-only data plane
+are implemented. Read a package's `doc.go` to learn what belongs in it before
 adding files.
 
 | Package | State |
@@ -15,10 +15,14 @@ adding files.
 | `auth` | Sessions, argon2id passwords, CSRF, email verification, password reset. **Gateway keys are not written yet** |
 | `api` | Auth endpoints, health probes |
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
-| `gateway`, `provider`, `router`, `cache`, `crypto`, `usage` | Still a one-line `doc.go` |
+| `provider`, `provider/mock` | The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
+| `gateway` | `POST /v1/chat/completions`, streaming and not, against a single provider. **Mounted only outside production**: it has no gateway keys yet |
+| `router`, `cache`, `crypto`, `usage`, `provider/openai`, `gemini`, `anthropic` | Still a one-line `doc.go` |
 
-Build-order steps 1 and the auth half of step 3 are done. Next by the spec's
-order is step 2: the mock provider streaming through `/v1`.
+Build-order steps 1 and 2 and the auth half of step 3 are done. Next is the
+rest of step 3: gateway keys, encrypted provider credentials and routes, which
+is also when `/v1` gets authentication and can be mounted in production. The
+step 2 design is in `features-specs/mock-provider-v1/design.md`.
 
 The design is already settled and written down. `Backend Architecture BYOK LLM Gateway (Go).md` at the repo root is the authoritative spec — read it before any non-trivial change. It also exists as a live Claude Docs document at https://claude.ai/artifact/KiGTMPuYo84W15uVSzNM1j, which is read through the Claude Docs connector rather than WebFetch. The two can drift; prefer the local file for code decisions.
 
@@ -74,6 +78,15 @@ active series before it drops data. The same goes for any label you add to a
 metric: use a value from a fixed set (`ratelimit.rejections` is labelled by
 `scope`, a literal at every call site, and never by the id). Telemetry is off
 when `OTEL_EXPORTER_OTLP_ENDPOINT` is empty; production logs a warning.
+
+**The first byte to the client is the point of no return, and it is the first
+*chunk*, not the provider call.** The `/v1` handler reads the upstream's first
+chunk before writing any header, so a provider that accepts the request and
+fails on its first read is still answered with a status (and can fail over
+once routing lands). After that, failure is a final `data: {"error":…}` event.
+A provider must make `Next` return promptly when its context ends: that is what
+stops an abandoned generation, and `TestClientDisconnectStopsTheUpstream` holds
+it to that.
 
 **`OTEL_EXPORTER_OTLP_HEADERS` is a secret.** For Grafana Cloud it holds the
 access token. `config` deliberately does not read it, the OTLP exporters read
