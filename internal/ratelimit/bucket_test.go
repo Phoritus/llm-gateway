@@ -79,11 +79,9 @@ func testRedis(t *testing.T) *redis.Client {
 // prefix prevents. No test may flush the whole database for the same reason.
 func testLimiter(t *testing.T, client *redis.Client) *Limiter {
 	t.Helper()
-	return &Limiter{
-		client: client,
-		script: redis.NewScript(bucketScript),
-		prefix: "rltest:" + strings.ReplaceAll(t.Name(), "/", "_"),
-	}
+	l := New(client)
+	l.prefix = "rltest:" + strings.ReplaceAll(t.Name(), "/", "_")
+	return l
 }
 
 func TestBucketAllowsUpToBurstThenRefuses(t *testing.T) {
@@ -214,28 +212,21 @@ func TestAllowRejectsAnUnusableRule(t *testing.T) {
 	}
 }
 
-func TestDeniedChecksAreCountedByScope(t *testing.T) {
-	client := testRedis(t)
-	limiter := testLimiter(t, client)
-	ctx := context.Background()
-
-	// The global provider can be installed once per process, which is why this
-	// is the only test that does.
+// metricReader installs a meter provider the first time it is called and
+// returns its reader. The package's counter binds to the first global provider
+// only, so every test that reads a metric has to share this one.
+var metricReader = sync.OnceValue(func() *sdkmetric.ManualReader {
 	reader := sdkmetric.NewManualReader()
 	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	return reader
+})
 
-	scope := "telemetry-test"
-	id := "count-" + time.Now().Format("150405.000000")
-	rule := Rule{Burst: 1, Refill: 0.01, TTL: time.Minute}
-
-	for i := range 4 {
-		if _, err := limiter.AllowN(ctx, scope, id, rule, 1); err != nil {
-			t.Fatalf("AllowN %d: %v", i, err)
-		}
-	}
-
+// rejectionsFor reads the rejections counted under one scope, or -1 when the
+// scope has no series.
+func rejectionsFor(t *testing.T, reader *sdkmetric.ManualReader, scope string) int64 {
+	t.Helper()
 	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(ctx, &rm); err != nil {
+	if err := reader.Collect(context.Background(), &rm); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 	var denied int64 = -1
@@ -251,7 +242,26 @@ func TestDeniedChecksAreCountedByScope(t *testing.T) {
 			}
 		}
 	}
-	if denied != 3 {
+	return denied
+}
+
+func TestDeniedChecksAreCountedByScope(t *testing.T) {
+	client := testRedis(t)
+	limiter := testLimiter(t, client)
+	ctx := context.Background()
+	reader := metricReader()
+
+	scope := "telemetry-test"
+	id := "count-" + time.Now().Format("150405.000000")
+	rule := Rule{Burst: 1, Refill: 0.01, TTL: time.Minute}
+
+	for i := range 4 {
+		if _, err := limiter.AllowN(ctx, scope, id, rule, 1); err != nil {
+			t.Fatalf("AllowN %d: %v", i, err)
+		}
+	}
+
+	if denied := rejectionsFor(t, reader, scope); denied != 3 {
 		t.Fatalf("rejections for scope %q = %d, want 3 (1 allowed of 4)", scope, denied)
 	}
 }
