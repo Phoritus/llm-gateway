@@ -12,6 +12,9 @@ import (
 // puts guessing out of reach, so these never need a rate limit of their own.
 const secretBytes = 32
 
+// secretEncodedLen is the length of a secret in unpadded base64.
+const secretEncodedLen = (secretBytes*8 + 5) / 6
+
 // newSecret returns a URL-safe secret and the SHA-256 of its exact string
 // form. Only the hash is ever persisted, so a database leak yields nothing
 // that can be replayed.

@@ -38,6 +38,7 @@ type Deps struct {
 	Config      *config.Config
 	Store       *store.Store
 	Credentials *store.Credentials
+	GatewayKeys *auth.GatewayKeys
 	Auth        *auth.Service
 	Limiter     *ratelimit.Limiter
 	Mailer      auth.Mailer
@@ -108,6 +109,10 @@ func Routes(d Deps) http.Handler {
 			r.Get("/credentials", d.handleListCredentials)
 			r.Post("/credentials", d.handleCreateCredential)
 			r.Delete("/credentials/{id}", d.handleDeleteCredential)
+
+			r.Get("/gateway-keys", d.handleListGatewayKeys)
+			r.Post("/gateway-keys", d.handleCreateGatewayKey)
+			r.Delete("/gateway-keys/{id}", d.handleRevokeGatewayKey)
 		})
 	})
 

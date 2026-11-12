@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // IsMember reports whether a user belongs to a workspace.
@@ -29,4 +31,16 @@ func (s *Store) IsMember(ctx context.Context, workspaceID, userID string) (bool,
 		return false, fmt.Errorf("select membership: %w", err)
 	}
 	return exists, nil
+}
+
+// lockWorkspaceForCap serializes the count-then-insert of a per-workspace cap.
+// Under READ COMMITTED, concurrent inserts each count the rows before any of
+// them commits and all pass the cap. NO KEY UPDATE rather than UPDATE, so the
+// lock does not block foreign-key checks from inserts into other tables that
+// reference the workspace.
+func lockWorkspaceForCap(ctx context.Context, tx pgx.Tx, workspaceID string) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM workspaces WHERE id = $1 FOR NO KEY UPDATE`, workspaceID); err != nil {
+		return fmt.Errorf("lock workspace: %w", err)
+	}
+	return nil
 }
