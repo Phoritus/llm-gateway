@@ -21,6 +21,7 @@ import (
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
+	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
@@ -172,16 +173,17 @@ func run(logger *slog.Logger) error {
 	}
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
 
-	// /v1 has no gateway keys until build-order step 3, so outside development
-	// it would be an open endpoint. It serves only the mock provider meanwhile.
+	providers := map[provider.Vendor]provider.Provider{}
 	if !cfg.IsProduction() {
-		mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
-			Provider: &mock.Provider{},
-			Timeout:  cfg.V1RequestTimeout,
-			Logger:   logger,
-		})))
-		logger.Warn("/v1 is serving the mock provider without authentication (development only)")
+		providers[provider.VendorMock] = &mock.Provider{}
 	}
+	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
+		Keys:      gatewayKeys,
+		Routes:    deps.Credentials,
+		Providers: providers,
+		Timeout:   cfg.V1RequestTimeout,
+		Logger:    logger,
+	})))
 
 	// otelhttp is outermost so the span exists when the access log reads its
 	// trace id. Route sits next to the mux because it needs the request the

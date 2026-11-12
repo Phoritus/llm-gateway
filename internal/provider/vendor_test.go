@@ -9,7 +9,7 @@ func TestParseVendor(t *testing.T) {
 			t.Errorf("ParseVendor(%q) = %q, %v", v, got, ok)
 		}
 	}
-	for _, s := range []string{"", "OpenAI", "ANTHROPIC", " openai", "mock", "unknown"} {
+	for _, s := range []string{"", "OpenAI", "ANTHROPIC", " openai", "Mock", "unknown"} {
 		if v, ok := ParseVendor(s); ok {
 			t.Errorf("ParseVendor(%q) = %q, want no match", s, v)
 		}

@@ -167,24 +167,92 @@ func (c *Credentials) Secret(ctx context.Context, workspaceID, id string) (strin
 	if err != nil {
 		return "", ErrNotFound
 	}
-	var (
-		vendor provider.Vendor
-		keyID  string
-		blob   []byte
-	)
+	var sealed sealedCredential
 	err = c.store.pool.QueryRow(ctx,
-		`SELECT provider, key_id, ciphertext FROM provider_credentials
-		  WHERE workspace_id = $1 AND id = $2`, workspaceID, rowID).Scan(&vendor, &keyID, &blob)
+		`SELECT id, provider, key_id, ciphertext FROM provider_credentials
+		  WHERE workspace_id = $1 AND id = $2`, workspaceID, rowID).
+		Scan(&sealed.id, &sealed.vendor, &sealed.keyID, &sealed.blob)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("select provider credential: %w", err)
 	}
-	plain, err := c.keys.Open(crypto.Sealed{KeyID: crypto.KeyID(keyID), Ciphertext: blob},
-		credentialAAD(ws, rowID, vendor))
+	return c.open(ws, sealed)
+}
+
+// ResolvedRoute is a route as /v1 calls it: its chain in order, each target
+// carrying the opened key it authenticates upstream with.
+type ResolvedRoute struct {
+	ID      string
+	MaxHops int
+	Targets []ResolvedTarget
+}
+
+type ResolvedTarget struct {
+	CredentialID string
+	Vendor       provider.Vendor
+	Model        string
+	Secret       string
+}
+
+// ResolveRoute finds the workspace's route for an alias and opens every
+// target's key, or returns ErrNotFound when the workspace has no such alias.
+func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias string) (*ResolvedRoute, error) {
+	ws, err := uuid.Parse(workspaceID)
 	if err != nil {
-		return "", fmt.Errorf("open provider credential %s: %w", id, err)
+		return nil, ErrNotFound
+	}
+	rows, err := c.store.pool.Query(ctx,
+		`SELECT r.id, r.max_hops, c.id, c.provider, t.model, c.key_id, c.ciphertext
+		   FROM routes r
+		   JOIN route_targets t ON t.route_id = r.id AND t.workspace_id = r.workspace_id
+		   JOIN provider_credentials c ON c.id = t.credential_id AND c.workspace_id = t.workspace_id
+		  WHERE r.workspace_id = $1 AND r.alias = $2
+		  ORDER BY t.position`, workspaceID, alias)
+	if err != nil {
+		return nil, fmt.Errorf("resolve route: %w", err)
+	}
+	defer rows.Close()
+
+	var route ResolvedRoute
+	for rows.Next() {
+		var (
+			sealed sealedCredential
+			model  string
+		)
+		if err := rows.Scan(&route.ID, &route.MaxHops, &sealed.id, &sealed.vendor, &model, &sealed.keyID, &sealed.blob); err != nil {
+			return nil, fmt.Errorf("scan route target: %w", err)
+		}
+		secret, err := c.open(ws, sealed)
+		if err != nil {
+			return nil, err
+		}
+		route.Targets = append(route.Targets, ResolvedTarget{
+			CredentialID: sealed.id.String(), Vendor: sealed.vendor, Model: model, Secret: secret,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("resolve route: %w", err)
+	}
+	if len(route.Targets) == 0 {
+		return nil, ErrNotFound
+	}
+	return &route, nil
+}
+
+type sealedCredential struct {
+	id     uuid.UUID
+	vendor provider.Vendor
+	keyID  string
+	blob   []byte
+}
+
+func (c *Credentials) open(ws uuid.UUID, s sealedCredential) (string, error) {
+	plain, err := c.keys.Open(crypto.Sealed{KeyID: crypto.KeyID(s.keyID), Ciphertext: s.blob},
+		credentialAAD(ws, s.id, s.vendor))
+	if err != nil {
+		return "", fmt.Errorf("open provider credential %s: %w", s.id, err)
 	}
 	return string(plain), nil
 }

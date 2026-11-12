@@ -17,6 +17,7 @@ import (
 const (
 	typeInvalidRequest = "invalid_request_error"
 	typeNotFound       = "not_found_error"
+	typePermission     = "permission_error"
 	typeRateLimit      = "rate_limit_error"
 	typeServer         = "server_error"
 )
@@ -79,6 +80,17 @@ func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err err
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(provider.RetryAfter(err))))
 	}
 	writeJSON(w, status, errorBody{Error: detail})
+}
+
+func (d Deps) serverError(w http.ResponseWriter, r *http.Request, err error, op string) {
+	if clientGone(r.Context()) {
+		return
+	}
+	d.logger().ErrorContext(r.Context(), op+" failed",
+		slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
+		slog.String("error", err.Error()))
+	writeError(w, http.StatusInternalServerError, typeServer, "internal_error",
+		"The gateway failed to process the request.")
 }
 
 func (d Deps) logUpstream(r *http.Request, err error) {

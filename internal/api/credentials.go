@@ -56,7 +56,7 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vendor, ok := parseVendorField(w, req.Provider)
+	vendor, ok := parseVendorField(w, req.Provider, d.Config.IsProduction())
 	if !ok {
 		return
 	}
@@ -98,16 +98,19 @@ func (d Deps) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func parseVendorField(w http.ResponseWriter, raw string) (provider.Vendor, bool) {
+func parseVendorField(w http.ResponseWriter, raw string, production bool) (provider.Vendor, bool) {
 	vendor, ok := provider.ParseVendor(raw)
-	if !ok {
-		names := make([]string, 0, len(provider.Vendors()))
-		for _, v := range provider.Vendors() {
+	if ok && !(production && vendor.DevelopmentOnly()) {
+		return vendor, true
+	}
+	var names []string
+	for _, v := range provider.Vendors() {
+		if !(production && v.DevelopmentOnly()) {
 			names = append(names, string(v))
 		}
-		invalidField(w, "provider", "provider must be one of: "+strings.Join(names, ", ")+".")
 	}
-	return vendor, ok
+	invalidField(w, "provider", "provider must be one of: "+strings.Join(names, ", ")+".")
+	return "", false
 }
 
 func parseNameField(w http.ResponseWriter, raw string) (string, bool) {

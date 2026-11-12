@@ -11,11 +11,12 @@ const (
 	VendorMistral    Vendor = "mistral"
 	VendorGemini     Vendor = "gemini"
 	VendorAnthropic  Vendor = "anthropic"
+	VendorMock       Vendor = "mock"
 )
 
 var vendors = []Vendor{
 	VendorOpenAI, VendorGroq, VendorCerebras, VendorOpenRouter,
-	VendorMistral, VendorGemini, VendorAnthropic,
+	VendorMistral, VendorGemini, VendorAnthropic, VendorMock,
 }
 
 // Vendors returns every Vendor in a stable order. The caller owns the slice.
@@ -30,3 +31,5 @@ func ParseVendor(s string) (Vendor, bool) {
 	}
 	return "", false
 }
+
+func (v Vendor) DevelopmentOnly() bool { return v == VendorMock }

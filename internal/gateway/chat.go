@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/store"
+	"llm-gateway/internal/telemetry"
 )
 
 // errDeadline marks the request's own deadline passing, as opposed to the
@@ -38,11 +41,20 @@ const writeGrace = 2 * time.Second
 func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(d.Timeout)
 	rc := http.NewResponseController(w)
+	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
+	defer cancel()
+	r = r.WithContext(ctx)
 
 	// The read deadline covers the body only. Left in place, it would fire in
 	// net/http's background read that watches for a disconnect, and the
-	// request would look abandoned instead of timed out.
+	// request would look abandoned instead of timed out. It is set before
+	// authenticating because refusing a request without reading its body
+	// makes net/http drain the body before it writes the refusal.
 	_ = rc.SetReadDeadline(deadline)
+	key, ok := d.authenticate(w, r)
+	if !ok {
+		return
+	}
 	req, ok := decodeChatRequest(w, r)
 	if !ok {
 		return
@@ -53,17 +65,39 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// request, so it does not carry over to the next one on the connection.
 	_ = rc.SetWriteDeadline(deadline.Add(writeGrace))
 
-	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
-	defer cancel()
-	r = r.WithContext(ctx)
+	route, err := d.Routes.ResolveRoute(ctx, key.WorkspaceID, req.Model)
+	if errors.Is(err, store.ErrNotFound) {
+		param := "model"
+		writeJSON(w, http.StatusNotFound, errorBody{Error: errorDetail{
+			Message: "The model `" + req.Model + "` does not exist. Create a route with this alias first.",
+			Type:    typeInvalidRequest, Param: &param, Code: "model_not_found",
+		}})
+		return
+	}
+	if err != nil {
+		d.serverError(w, r, err, "resolve route")
+		return
+	}
+
+	target := route.Targets[0]
+	adapter, ok := d.Providers[target.Vendor]
+	if !ok {
+		d.logger().WarnContext(ctx, "no adapter for vendor",
+			slog.String("request_id", telemetry.RequestIDFrom(ctx)),
+			slog.String("vendor", string(target.Vendor)))
+		writeError(w, http.StatusBadGateway, typeServer, "provider_unavailable",
+			"This route's provider is not available on this gateway.")
+		return
+	}
 
 	upstream := *req
+	upstream.Model = target.Model
 	if !req.Stream {
 		// A non-streaming answer reports usage, so ask the stream for it.
 		upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
 	}
 
-	stream, err := d.Provider.ChatStream(ctx, &upstream, provider.Credential{})
+	stream, err := adapter.ChatStream(ctx, &upstream, provider.Credential{APIKey: target.Secret})
 	if err != nil {
 		d.failBeforeFirstByte(w, r, err)
 		return

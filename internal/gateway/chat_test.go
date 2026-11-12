@@ -16,21 +16,80 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"llm-gateway/internal/auth"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
+	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
 
+const (
+	testKey           = "gwk_test"
+	unverifiedKey     = "gwk_unverified"
+	testSecret        = "sk-upstream-secret"
+	missingAlias      = "no-such-route"
+	renamedAlias      = "my-model"
+	adapterlessPrefix = "openai/"
+)
+
+type fakeKeys struct{}
+
+func (fakeKeys) Authenticate(_ context.Context, token string) (store.ActiveGatewayKey, error) {
+	switch token {
+	case testKey:
+		return store.ActiveGatewayKey{ID: "k1", WorkspaceID: "ws1", OwnerVerified: true}, nil
+	case unverifiedKey:
+		return store.ActiveGatewayKey{ID: "k2", WorkspaceID: "ws2"}, nil
+	}
+	return store.ActiveGatewayKey{}, auth.ErrInvalidGatewayKey
+}
+
+type fakeRoutes struct{}
+
+func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*store.ResolvedRoute, error) {
+	if workspaceID != "ws1" || alias == missingAlias {
+		return nil, store.ErrNotFound
+	}
+	vendor := provider.VendorMock
+	if alias == renamedAlias {
+		alias = mock.ModelEcho
+	}
+	if model, ok := strings.CutPrefix(alias, adapterlessPrefix); ok {
+		vendor, alias = provider.VendorOpenAI, model
+	}
+	return &store.ResolvedRoute{ID: "r1", MaxHops: 3, Targets: []store.ResolvedTarget{
+		{CredentialID: "c1", Vendor: vendor, Model: alias, Secret: testSecret},
+	}}, nil
+}
+
+func deps(p provider.Provider, timeout time.Duration) Deps {
+	return Deps{
+		Keys:      fakeKeys{},
+		Routes:    fakeRoutes{},
+		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: p},
+		Timeout:   timeout,
+	}
+}
+
 func newServer(t *testing.T, p provider.Provider, timeout time.Duration) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.StripPrefix("/v1", Routes(Deps{Provider: p, Timeout: timeout})))
+	srv := httptest.NewServer(http.StripPrefix("/v1", Routes(deps(p, timeout))))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
 func post(t *testing.T, srv *httptest.Server, body string) *http.Response {
+	return postAs(t, srv, "Bearer "+testKey, body)
+}
+
+func postAs(t *testing.T, srv *httptest.Server, authorization, body string) *http.Response {
 	t.Helper()
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,6 +264,7 @@ func TestClientDisconnectStopsTheUpstream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/v1/chat/completions",
 		strings.NewReader(chatBody("mock/slow", true)))
+	req.Header.Set("Authorization", "Bearer "+testKey)
 	go func() {
 		if resp, err := http.DefaultClient.Do(req); err == nil {
 			resp.Body.Close()
@@ -266,7 +326,7 @@ func TestUnknownPathIsAnOpenAIError(t *testing.T) {
 func productionChain(t *testing.T, p provider.Provider, timeout time.Duration) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.Handle("/v1/", http.StripPrefix("/v1", Routes(Deps{Provider: p, Timeout: timeout})))
+	mux.Handle("/v1/", http.StripPrefix("/v1", Routes(deps(p, timeout))))
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	srv := httptest.NewServer(otelhttp.NewHandler(
 		telemetry.RequestID(telemetry.AccessLog(logger)(telemetry.Route(mux))), "http.server"))
@@ -307,7 +367,7 @@ func TestDeadlineCoversASlowBody(t *testing.T) {
 	}
 	defer conn.Close()
 	// Promise 1000 bytes, send one, then nothing.
-	fmt.Fprint(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+	fmt.Fprint(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer "+testKey+"\r\nContent-Length: 1000\r\n\r\n{")
 
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
@@ -318,6 +378,26 @@ func TestDeadlineCoversASlowBody(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusRequestTimeout || errorCode(t, body) != "request_timeout" {
 		t.Fatalf("%d %s, want 408 request_timeout", resp.StatusCode, body)
+	}
+}
+
+func TestDeadlineCoversASlowBodyWithoutAKey(t *testing.T) {
+	srv := productionChain(t, &mock.Provider{}, 300*time.Millisecond)
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("an unauthenticated stalled body held the connection: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
 }
 
@@ -334,7 +414,7 @@ func TestDeadlineReleasesAClientThatStopsReading(t *testing.T) {
 	// the handler blocks writing once the client stops reading.
 	body := `{"model":"echo","stream":true,"messages":[{"role":"user","content":"` +
 		strings.Repeat("a ", 1<<20) + `"}]}`
-	fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", testKey, len(body), body)
 
 	select {
 	case <-p.closed:
