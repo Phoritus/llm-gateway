@@ -31,7 +31,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [02](issues/02-crypto-seal-open.md) | internal/crypto: AES-256-GCM seal and open | `resolved` | 01 |
 | [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `resolved` | 02 |
 | [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `resolved` | 01 |
-| [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `ready-for-agent` | 03 |
+| [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `resolved` | 03 |
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `ready-for-agent` | 04, 05 |
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `ready-for-agent` | 06 |
 | [08](issues/08-gemini-adapter.md) | provider/gemini adapter | `ready-for-agent` | 07 |
@@ -78,6 +78,15 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   (`revoked_at`) so usage rows can still name the key; at most 50 unrevoked
   keys per workspace. `last_used_at` is batched in memory and written once a
   minute per instance, and once more on shutdown.
+- Ticket 05 (routes): `route_targets` carries `workspace_id` with composite
+  foreign keys to `routes (id, workspace_id)` and `provider_credentials (id,
+  workspace_id)`, so a target naming another tenant's credential is refused by
+  the database, not by a handler check. Deleting a credential a route still
+  names is refused (409 `credential_in_use`) rather than cascaded, so a chain
+  never shrinks without its owner seeing why. PUT replaces the route and its
+  whole chain; an omitted `max_hops` means the default (3), bounded 1 to 10.
+  Aliases are case-sensitive, at most 64 characters of `[A-Za-z0-9._:/-]`; at
+  most 10 targets per route (no repeats) and 100 routes per workspace.
 
 ## Fog
 

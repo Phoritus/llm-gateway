@@ -209,7 +209,7 @@ func truncateAll(t *testing.T, st *store.Store) {
 	t.Helper()
 	// One statement so the foreign keys never see an inconsistent state.
 	_, err := st.Pool().Exec(context.Background(),
-		`TRUNCATE gateway_keys, provider_credentials, sessions, email_verification_tokens, password_reset_tokens,
+		`TRUNCATE route_targets, routes, gateway_keys, provider_credentials, sessions, email_verification_tokens, password_reset_tokens,
 		          workspace_members, workspaces, users CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)

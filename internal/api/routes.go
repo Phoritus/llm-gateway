@@ -113,6 +113,11 @@ func Routes(d Deps) http.Handler {
 			r.Get("/gateway-keys", d.handleListGatewayKeys)
 			r.Post("/gateway-keys", d.handleCreateGatewayKey)
 			r.Delete("/gateway-keys/{id}", d.handleRevokeGatewayKey)
+
+			r.Get("/routes", d.handleListRoutes)
+			r.Post("/routes", d.handleCreateRoute)
+			r.Put("/routes/{id}", d.handleUpdateRoute)
+			r.Delete("/routes/{id}", d.handleDeleteRoute)
 		})
 	})
 
@@ -162,7 +167,7 @@ func corsMiddleware(allowed config.Origins) func(http.Handler) http.Handler {
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Set("Access-Control-Allow-Credentials", "true")
 				h.Set("Access-Control-Allow-Headers", "Content-Type, "+auth.CSRFHeader)
-				h.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				h.Set("Access-Control-Max-Age", "600")
 				// The response varies by origin, so a shared cache must not
 				// serve one origin's headers to another.

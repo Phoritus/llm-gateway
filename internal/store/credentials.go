@@ -123,14 +123,17 @@ func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credentia
 	return out, nil
 }
 
-// Delete removes a credential, or returns ErrNotFound when the workspace has
-// no such one.
+// Delete removes a credential. It returns ErrNotFound when the workspace has
+// no such one, and ErrCredentialInUse while a route still names it.
 func (c *Credentials) Delete(ctx context.Context, workspaceID, id string) error {
 	if _, err := uuid.Parse(id); err != nil {
 		return ErrNotFound
 	}
 	tag, err := c.store.pool.Exec(ctx,
 		`DELETE FROM provider_credentials WHERE workspace_id = $1 AND id = $2`, workspaceID, id)
+	if pgCode(err) == foreignKeyViolation {
+		return ErrCredentialInUse
+	}
 	if err != nil {
 		return fmt.Errorf("delete provider credential: %w", err)
 	}

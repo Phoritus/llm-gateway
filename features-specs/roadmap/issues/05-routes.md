@@ -1,6 +1,6 @@
 # 05 Routes: tables and /api/routes CRUD
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 03
 
 Build-order step 3.
