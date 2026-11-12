@@ -88,6 +88,16 @@ A provider must make `Next` return promptly when its context ends: that is what
 stops an abandoned generation, and `TestClientDisconnectStopsTheUpstream` holds
 it to that.
 
+**A request deadline has to reach the socket, not just the context.** A
+handler blocked reading a body the client is dripping, or writing to a client
+that stopped reading, never looks at its context. `/v1` sets read and write
+deadlines through `http.ResponseController`, which works only because every
+wrapper in the chain (`otelhttp`'s httpsnoop, `telemetry`'s `statusRecorder`)
+implements `Unwrap`. A new response-writer wrapper must too, or the deadline
+silently stops applying; `TestDeadlineCoversASlowBody` and
+`TestDeadlineReleasesAClientThatStopsReading` run the production chain to catch
+that.
+
 **`OTEL_EXPORTER_OTLP_HEADERS` is a secret.** For Grafana Cloud it holds the
 access token. `config` deliberately does not read it, the OTLP exporters read
 it from the environment themselves, and nothing may log it. Set it in the

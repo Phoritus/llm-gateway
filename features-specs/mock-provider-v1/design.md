@@ -8,6 +8,17 @@ chunk before it knows it will assemble, and the exact cache in step 7 must
 assemble while the same chunks stream to the client. The contract is otherwise
 unchanged.
 
+Deviation after `interrogate` (all four adversaries found the first two
+independently): the deadline was only a context, so it did not stop a handler
+blocked on the socket. A client that drips its body, or stops reading a
+stream, held the request forever. The handler now also puts the deadline on
+the socket through `http.ResponseController`: a read deadline over the body
+(answered 408 `request_timeout` with `Connection: close`), and a write deadline
+of the request deadline plus a 2s grace so the timeout event can still be sent.
+Validation also now refuses a blank model, an unknown role, and content that is
+not a string, an array of parts, or null. Value ranges (`max_tokens`,
+`temperature`) stay the upstream's to judge, since they differ by provider.
+
 ## Usage first
 
 ```sh

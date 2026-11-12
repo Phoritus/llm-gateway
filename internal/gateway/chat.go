@@ -1,11 +1,15 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"llm-gateway/internal/provider"
 )
@@ -15,6 +19,11 @@ import (
 // answered; the second has nobody left to answer.
 var errDeadline = errors.New("request deadline exceeded")
 
+// writeGrace is how long past the deadline a write may still take, which is
+// long enough to send the timeout error and short enough that a client that
+// stopped reading lets go of the request soon after.
+const writeGrace = 2 * time.Second
+
 // handleChatCompletions is POST /v1/chat/completions.
 //
 // The point of no return is the first chunk, not the call. The upstream's
@@ -22,13 +31,29 @@ var errDeadline = errors.New("request deadline exceeded")
 // accepts the request and then fails at once is still answered with a status
 // -- and, once routing lands, can still fail over. After that byte, a failure
 // can only end the stream with an error event.
+//
+// The deadline is also put on the socket. A context only stops code that looks
+// at it, and a handler blocked reading a body the client is dripping, or
+// writing to a client that stopped reading, looks at nothing.
 func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	deadline := time.Now().Add(d.Timeout)
+	rc := http.NewResponseController(w)
+
+	// The read deadline covers the body only. Left in place, it would fire in
+	// net/http's background read that watches for a disconnect, and the
+	// request would look abandoned instead of timed out.
+	_ = rc.SetReadDeadline(deadline)
 	req, ok := decodeChatRequest(w, r)
 	if !ok {
 		return
 	}
+	_ = rc.SetReadDeadline(time.Time{})
+	// Writes get a grace period past the deadline so the timeout itself can
+	// still be told to the client. net/http clears the deadline after the
+	// request, so it does not carry over to the next one on the connection.
+	_ = rc.SetWriteDeadline(deadline.Add(writeGrace))
 
-	ctx, cancel := context.WithTimeoutCause(r.Context(), d.Timeout, errDeadline)
+	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
 	defer cancel()
 	r = r.WithContext(ctx)
 
@@ -161,6 +186,14 @@ func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRe
 				"The request body is too large.")
 			return nil, false
 		}
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			// Without this, net/http reads the rest of the promised body before
+			// sending the answer, which is the wait the deadline just ended.
+			w.Header().Set("Connection", "close")
+			writeError(w, http.StatusRequestTimeout, typeInvalidRequest, "request_timeout",
+				"The request body was not received in time.")
+			return nil, false
+		}
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_body",
 			"The request body could not be read.")
 		return nil, false
@@ -172,7 +205,7 @@ func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRe
 			"The request body must be a JSON object in the chat completions format.")
 		return nil, false
 	}
-	if req.Model == "" {
+	if strings.TrimSpace(req.Model) == "" {
 		invalidField(w, "model", "model is required.")
 		return nil, false
 	}
@@ -181,10 +214,35 @@ func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRe
 		return nil, false
 	}
 	for _, m := range req.Messages {
-		if m.Role == "" {
-			invalidField(w, "messages", "Every message needs a role.")
+		if !knownRoles[m.Role] {
+			invalidField(w, "messages",
+				"Every message needs a role of system, developer, user, assistant or tool.")
+			return nil, false
+		}
+		if !contentShapeOK(m.Content) {
+			invalidField(w, "messages", "A message's content must be a string, an array of parts, or null.")
 			return nil, false
 		}
 	}
 	return &req, true
+}
+
+// knownRoles are the roles OpenAI's chat format defines. "function" is the
+// deprecated predecessor of "tool" and still sent by older clients.
+var knownRoles = map[string]bool{
+	"system": true, "developer": true, "user": true, "assistant": true, "tool": true, "function": true,
+}
+
+// contentShapeOK checks content's JSON type only. What is inside the parts is
+// the upstream's to judge: the part types it accepts differ by provider.
+func contentShapeOK(raw json.RawMessage) bool {
+	b := bytes.TrimSpace(raw)
+	if len(b) == 0 {
+		return true
+	}
+	switch b[0] {
+	case '"', '[', 'n':
+		return true
+	}
+	return false
 }

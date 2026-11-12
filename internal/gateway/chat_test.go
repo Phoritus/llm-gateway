@@ -4,15 +4,21 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
+	"llm-gateway/internal/telemetry"
 )
 
 func newServer(t *testing.T, p provider.Provider, timeout time.Duration) *httptest.Server {
@@ -251,5 +257,113 @@ func TestUnknownPathIsAnOpenAIError(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusNotFound || errorCode(t, body) != "not_found" {
 		t.Errorf("%d %s", resp.StatusCode, body)
+	}
+}
+
+// productionChain wraps Routes in the same middleware cmd/gateway does, so a
+// socket deadline set through http.ResponseController is proven to reach the
+// connection through every wrapper.
+func productionChain(t *testing.T, p provider.Provider, timeout time.Duration) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", http.StripPrefix("/v1", Routes(Deps{Provider: p, Timeout: timeout})))
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	srv := httptest.NewServer(otelhttp.NewHandler(
+		telemetry.RequestID(telemetry.AccessLog(logger)(telemetry.Route(mux))), "http.server"))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// closeWatched reports when the handler releases its stream, which it does on
+// the way out.
+type closeWatched struct {
+	mock.Provider
+	closed chan struct{}
+}
+
+func (c *closeWatched) ChatStream(ctx context.Context, req *provider.ChatRequest, cred provider.Credential) (provider.Stream, error) {
+	s, err := c.Provider.ChatStream(ctx, req, cred)
+	if err != nil {
+		return nil, err
+	}
+	return closeSignal{Stream: s, closed: c.closed}, nil
+}
+
+type closeSignal struct {
+	provider.Stream
+	closed chan struct{}
+}
+
+func (c closeSignal) Close() error {
+	close(c.closed)
+	return c.Stream.Close()
+}
+
+func TestDeadlineCoversASlowBody(t *testing.T) {
+	srv := productionChain(t, &mock.Provider{}, 300*time.Millisecond)
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// Promise 1000 bytes, send one, then nothing.
+	fmt.Fprint(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n{")
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no response to a stalled body: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusRequestTimeout || errorCode(t, body) != "request_timeout" {
+		t.Fatalf("%d %s, want 408 request_timeout", resp.StatusCode, body)
+	}
+}
+
+func TestDeadlineReleasesAClientThatStopsReading(t *testing.T) {
+	p := &closeWatched{closed: make(chan struct{})}
+	srv := productionChain(t, p, 300*time.Millisecond)
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// An echo of a million words is far more than the socket buffers hold, so
+	// the handler blocks writing once the client stops reading.
+	body := `{"model":"echo","stream":true,"messages":[{"role":"user","content":"` +
+		strings.Repeat("a ", 1<<20) + `"}]}`
+	fmt.Fprintf(conn, "POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+
+	select {
+	case <-p.closed:
+	case <-time.After(writeGrace + 10*time.Second):
+		t.Fatal("the handler was still writing long after the deadline and its grace period")
+	}
+}
+
+func TestMalformedMessagesAreRefused(t *testing.T) {
+	srv := newServer(t, &mock.Provider{}, time.Minute)
+	for name, body := range map[string]string{
+		"blank model":    `{"model":"   ","messages":[{"role":"user","content":"x"}]}`,
+		"unknown role":   `{"model":"echo","messages":[{"role":"wizard","content":"x"}]}`,
+		"number content": `{"model":"echo","messages":[{"role":"user","content":42}]}`,
+		"object content": `{"model":"echo","messages":[{"role":"user","content":{"a":1}}]}`,
+	} {
+		resp := post(t, srv, body)
+		got, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusBadRequest || errorCode(t, got) != "invalid_value" {
+			t.Errorf("%s: %d %s, want 400 invalid_value", name, resp.StatusCode, got)
+		}
+	}
+	for name, body := range map[string]string{
+		"null content":  `{"model":"echo","messages":[{"role":"assistant","content":null,"tool_calls":[]}]}`,
+		"content parts": `{"model":"echo","messages":[{"role":"user","content":[{"type":"text","text":"x"}]}]}`,
+		"developer":     `{"model":"echo","messages":[{"role":"developer","content":"x"}]}`,
+	} {
+		if resp := post(t, srv, body); resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: status %d, want 200", name, resp.StatusCode)
+		}
 	}
 }
