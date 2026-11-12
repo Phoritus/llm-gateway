@@ -19,17 +19,13 @@ const (
 var (
 	// ErrUnknownKey means the value was sealed under a key this keyring does not hold.
 	ErrUnknownKey = errors.New("crypto: unknown key id")
-	// ErrOpen means authentication failed or the ciphertext is malformed. It
-	// says no more, so it cannot leak anything about why.
+	// ErrOpen means authentication failed or the ciphertext is malformed.
 	ErrOpen = errors.New("crypto: cannot open sealed value")
 )
 
-// KeyID names the master key a value was sealed under. It is a truncated HMAC
-// of the key, so it needs no config and reveals nothing usable about the key.
+// KeyID names the master key a value was sealed under.
 type KeyID string
 
-// Sealed is what the store persists: two columns, so the rotation job can
-// query rows WHERE key_id <> current.
 type Sealed struct {
 	KeyID      KeyID
 	Ciphertext []byte // nonce (12 bytes) || GCM ciphertext+tag
@@ -89,8 +85,7 @@ func (k *Keyring) Seal(plaintext, aad []byte) Sealed {
 	return Sealed{KeyID: k.current, Ciphertext: k.aeads[k.current].Seal(nil, nil, plaintext, aad)}
 }
 
-// Open picks the key by s.KeyID. A rewritten id selects a different key, so
-// GCM rejects the value without the id needing to be authenticated itself.
+// Open picks the key by s.KeyID.
 func (k *Keyring) Open(s Sealed, aad []byte) ([]byte, error) {
 	aead, ok := k.aeads[s.KeyID]
 	if !ok {
