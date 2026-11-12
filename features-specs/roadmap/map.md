@@ -29,7 +29,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | --- | --- | --- | --- |
 | [01](issues/01-merge-pr-4.md) | Merge PR #4 (step 2: mock provider through /v1) | `resolved` | - |
 | [02](issues/02-crypto-seal-open.md) | internal/crypto: AES-256-GCM seal and open | `resolved` | 01 |
-| [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `ready-for-agent` | 02 |
+| [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `claimed` | 02 |
 | [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `ready-for-agent` | 01 |
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `ready-for-agent` | 03 |
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `ready-for-agent` | 04, 05 |

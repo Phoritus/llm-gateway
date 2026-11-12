@@ -1,6 +1,6 @@
 # 03 Provider credentials: table, store, /api/credentials
 
-Status: ready-for-agent
+Status: claimed
 Blocked by: 02
 
 Build-order step 3.
