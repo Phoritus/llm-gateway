@@ -35,12 +35,13 @@ const maxBodyBytes = 64 << 10
 // Deps is everything the control plane needs. It is passed by value; all
 // fields are pointers or interfaces that are safe to share.
 type Deps struct {
-	Config  *config.Config
-	Store   *store.Store
-	Auth    *auth.Service
-	Limiter *ratelimit.Limiter
-	Mailer  auth.Mailer
-	Logger  *slog.Logger
+	Config      *config.Config
+	Store       *store.Store
+	Credentials *store.Credentials
+	Auth        *auth.Service
+	Limiter     *ratelimit.Limiter
+	Mailer      auth.Mailer
+	Logger      *slog.Logger
 }
 
 func (d Deps) logger() *slog.Logger {
@@ -101,13 +102,12 @@ func Routes(d Deps) http.Handler {
 		// address. The gate is on the group for the same reason the rate limit
 		// is: a route added here inherits it, and a route added here having
 		// forgotten it is not a thing that can happen.
-		//
-		// The group is empty today because no feature routes exist yet. Gateway
-		// keys, provider credentials, route aliases and usage mount here when
-		// build-order step 3 lands, and /v1 enforces the same rule through the
-		// gateway key's workspace rather than through a session.
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireVerifiedEmail(emailNotVerified))
+
+			r.Get("/credentials", d.handleListCredentials)
+			r.Post("/credentials", d.handleCreateCredential)
+			r.Delete("/credentials/{id}", d.handleDeleteCredential)
 		})
 	})
 

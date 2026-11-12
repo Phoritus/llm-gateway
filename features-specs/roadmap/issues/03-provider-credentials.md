@@ -1,6 +1,6 @@
 # 03 Provider credentials: table, store, /api/credentials
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 Build-order step 3.
@@ -21,3 +21,10 @@ Build-order step 3.
 Spec: [Data model](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md), [Control plane API](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md), [Security](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+- Built without a `nonce` column: `crypto.Sealed.Ciphertext` already carries
+  the nonce. The provider is a fixed vendor set (`openai`, `groq`, `cerebras`,
+  `openrouter`, `mistral`, `gemini`, `anthropic`) rather than `openai` plus a
+  stored base URL, because a user-supplied URL is the Phase 2 SSRF surface.
+  Ticket 07 attaches each vendor's base URL in code. `mock` is not a vendor;
+  ticket 06 decides how it is exposed.

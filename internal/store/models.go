@@ -75,3 +75,7 @@ type SessionInput struct {
 	UserAgent   string
 	IP          *netip.Addr
 }
+
+// ErrLimitReached means the workspace already holds the maximum number of
+// provider credentials.
+var ErrLimitReached = errors.New("store: credential limit reached")

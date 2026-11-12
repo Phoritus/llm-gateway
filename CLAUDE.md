@@ -10,20 +10,20 @@ adding files.
 
 | Package | State |
 | --- | --- |
-| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis |
+| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis. `store.Credentials` seals provider keys (AAD binds workspace, row and vendor; at most 50 per workspace) |
 | `telemetry` | Built: request id, redacting access log (with `trace_id`), OpenTelemetry setup over OTLP, bounded `http.route` labelling, `postgres.up`/`redis.up` gauges. `store` adds the pool gauges and `ratelimit` the `ratelimit.rejections` counter |
 | `auth` | Sessions, argon2id passwords, CSRF, email verification, password reset. **Gateway keys are not written yet** |
-| `api` | Auth endpoints, health probes |
+| `api` | Auth endpoints, health probes, `GET/POST /api/credentials` and `DELETE /api/credentials/{id}` (last 4 characters only) |
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
-| `provider`, `provider/mock` | The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
+| `provider`, `provider/mock` | `Vendor`, the fixed set of upstreams a credential can name. The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
 | `gateway` | `POST /v1/chat/completions`, streaming and not, against a single provider. **Mounted only outside production**: it has no gateway keys yet |
-| `crypto` | AES-256-GCM `Keyring`: `Seal`/`Open` with caller-supplied AAD, a key id derived from each key, older keys accepted for rotation. Not yet called: ticket 03 wires it to `config.MasterKey` |
+| `crypto` | AES-256-GCM `Keyring`: `Seal`/`Open` with caller-supplied AAD, a key id derived from each key, older keys accepted for rotation. Used by `store.Credentials`, keyed by `config.MasterKey` |
 | `router`, `cache`, `usage`, `provider/openai`, `gemini`, `anthropic` | Still a one-line `doc.go` |
 
-Build-order steps 1 and 2 and the auth half of step 3 are done. **The work
-left is an ordered ticket list in `features-specs/roadmap/map.md`** -- read it
-at the start of a session and take the next unblocked ticket. Next is the rest
-of step 3: gateway keys, encrypted provider credentials and routes, which is
+Build-order steps 1 and 2, the auth half of step 3 and provider credentials
+are done. **The work left is an ordered ticket list in
+`features-specs/roadmap/map.md`** -- read it at the start of a session and take
+the next unblocked ticket. Next is the rest of step 3: gateway keys and routes, which is
 also when `/v1` gets authentication and can be mounted in production. The step
 2 design is in `features-specs/mock-provider-v1/design.md`.
 
