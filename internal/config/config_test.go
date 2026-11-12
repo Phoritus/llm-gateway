@@ -35,6 +35,7 @@ func apply(t *testing.T, env map[string]string) {
 		"MASTER_KEY", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
+		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -295,6 +296,40 @@ func TestLoadOwnsTheV1RequestTimeout(t *testing.T) {
 	apply(t, env)
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() with V1_REQUEST_TIMEOUT=0s = nil error, want a refusal")
+	}
+}
+
+func TestLoadOwnsTheV1Limits(t *testing.T) {
+	apply(t, productionEnv(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	got := [5]int{cfg.V1KeyRPM, cfg.V1KeyTPM, cfg.V1WorkspaceRPM, cfg.V1WorkspaceTPM, cfg.V1WorkspaceConcurrency}
+	if want := [5]int{120, 200_000, 300, 500_000, 20}; got != want {
+		t.Errorf("default limits = %v, want %v", got, want)
+	}
+
+	env := productionEnv(t)
+	env["V1_KEY_RPM"] = "7"
+	apply(t, env)
+	if cfg, err := Load(); err != nil || cfg.V1KeyRPM != 7 {
+		t.Fatalf("Load() with V1_KEY_RPM=7 = %v, %v; want it read", cfg, err)
+	}
+
+	// A zero limit would refuse every request, and a zero concurrency cap
+	// every one too, so neither is accepted as a way to say "unlimited".
+	for _, key := range []string{
+		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
+	} {
+		for _, bad := range []string{"0", "-1", "many", "1.5"} {
+			env := productionEnv(t)
+			env[key] = bad
+			apply(t, env)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("Load() with %s=%s = %v, want a refusal naming it", key, bad, err)
+			}
+		}
 	}
 }
 
