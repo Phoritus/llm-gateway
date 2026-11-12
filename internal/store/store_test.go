@@ -68,7 +68,7 @@ func newTestStore(t *testing.T) *Store {
 	}
 	// One statement so the foreign keys never see an inconsistent state.
 	if _, err := st.pool.Exec(ctx,
-		`TRUNCATE sessions, email_verification_tokens, password_reset_tokens,
+		`TRUNCATE provider_credentials, sessions, email_verification_tokens, password_reset_tokens,
 		          workspace_members, workspaces, users CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
