@@ -19,10 +19,12 @@ adding files.
 | `gateway` | `POST /v1/chat/completions`, streaming and not, against a single provider. **Mounted only outside production**: it has no gateway keys yet |
 | `router`, `cache`, `crypto`, `usage`, `provider/openai`, `gemini`, `anthropic` | Still a one-line `doc.go` |
 
-Build-order steps 1 and 2 and the auth half of step 3 are done. Next is the
-rest of step 3: gateway keys, encrypted provider credentials and routes, which
-is also when `/v1` gets authentication and can be mounted in production. The
-step 2 design is in `features-specs/mock-provider-v1/design.md`.
+Build-order steps 1 and 2 and the auth half of step 3 are done. **The work
+left is an ordered ticket list in `features-specs/roadmap/map.md`** -- read it
+at the start of a session and take the next unblocked ticket. Next is the rest
+of step 3: gateway keys, encrypted provider credentials and routes, which is
+also when `/v1` gets authentication and can be mounted in production. The step
+2 design is in `features-specs/mock-provider-v1/design.md`.
 
 The design is already settled and written down. `Backend Architecture BYOK LLM Gateway (Go).md` at the repo root is the authoritative spec — read it before any non-trivial change. It also exists as a live Claude Docs document at https://claude.ai/artifact/KiGTMPuYo84W15uVSzNM1j, which is read through the Claude Docs connector rather than WebFetch. The two can drift; prefer the local file for code decisions.
 
