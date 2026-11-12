@@ -26,3 +26,7 @@ Spec: [Rate limiting](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(
 From ticket 06: `/v1` is mounted in production, and a well-formed but unknown
 `gwk_` key costs one unique-index Postgres lookup with nothing in front of it.
 Put an IP-level limit on failed authentications ahead of the per-key limit.
+
+From ticket 07: `openai.Endpoints` strips `stream_options` for Mistral,
+which is believed to put usage on its final chunk unasked. Confirm that with
+a real key (ticket 19) before relying on it to reconcile Mistral calls.
