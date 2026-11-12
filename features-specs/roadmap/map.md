@@ -32,7 +32,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `resolved` | 02 |
 | [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `resolved` | 01 |
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `resolved` | 03 |
-| [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `ready-for-agent` | 04, 05 |
+| [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `resolved` | 04, 05 |
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `ready-for-agent` | 06 |
 | [08](issues/08-gemini-adapter.md) | provider/gemini adapter | `ready-for-agent` | 07 |
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `ready-for-agent` | 07 |
@@ -88,7 +88,18 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   Aliases are case-sensitive, at most 64 characters of `[A-Za-z0-9._:/-]`; at
   most 10 targets per route (no repeats) and 100 routes per workspace.
 
+- Ticket 06 (/v1 auth and routing): the handler authenticates before reading
+  the body, then resolves `model` through `store.Credentials.ResolveRoute`,
+  which opens the whole chain in one query so the router (ticket 11) gets
+  every hop without another round trip. `gateway.Deps` holds an adapter per
+  `provider.Vendor`; a vendor with no adapter answers 502
+  `provider_unavailable`, which is every real vendor until ticket 07. `mock`
+  is a vendor (migration 00005): the credentials API refuses it in
+  production and production registers no mock adapter. Email verification is
+  the workspace owner's, joined into the key lookup and cached with the key
+  for its 1 second. No IP limit or negative cache in front of key lookup yet:
+  a miss is one unique-index lookup, and ticket 10 owns /v1 limiting.
+
 ## Fog
 
-- How `mock` is exposed once routes exist (ticket 06).
 - Whether /v1 rate limiting fails open or closed when Redis is down (ticket 10).

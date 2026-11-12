@@ -26,6 +26,9 @@ import (
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
+	"llm-gateway/internal/gateway"
+	"llm-gateway/internal/provider"
+	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -195,6 +198,13 @@ func newTestEnv(t *testing.T) *testEnv {
 		Check{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
 	)(mux)
 	mux.Handle("/api/", http.StripPrefix("/api", Routes(deps)))
+	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
+		Keys:      deps.GatewayKeys,
+		Routes:    deps.Credentials,
+		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: &mock.Provider{}},
+		Timeout:   time.Minute,
+		Logger:    deps.Logger,
+	})))
 
 	server := httptest.NewServer(telemetry.RequestID(mux))
 	t.Cleanup(server.Close)

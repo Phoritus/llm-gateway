@@ -61,7 +61,7 @@ func TestCredentialValidation(t *testing.T) {
 		name, param string
 		body        map[string]any
 	}{
-		{"unknown provider", "provider", map[string]any{"provider": "mock", "secret": apiTestSecret}},
+		{"unknown provider", "provider", map[string]any{"provider": "together", "secret": apiTestSecret}},
 		{"short secret", "secret", map[string]any{"provider": "groq", "secret": "short-secret-value"}},
 		{"secret with a space", "secret", map[string]any{"provider": "groq", "secret": "sk-live-abcdefgh ijklmnopqrstWXYZ"}},
 		{"non-ASCII secret", "secret", map[string]any{"provider": "groq", "secret": "sk-live-abcdefghijklmnopqrsté"}},

@@ -202,3 +202,45 @@ func TestCredentialLimitHoldsUnderConcurrentCreates(t *testing.T) {
 		t.Fatalf("workspace holds %d credentials, want exactly %d", len(creds), maxCredentialsPerWorkspace)
 	}
 }
+
+func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
+	st := newTestStore(t)
+	c := newTestCredentials(t, st)
+	ctx := context.Background()
+	ws := signup(t, st, "a@example.com").WorkspaceID
+	other := signup(t, st, "b@example.com").WorkspaceID
+
+	first := mustCreate(t, c, ws, "first")
+	second, err := c.Create(ctx, ws, NewCredential{Provider: provider.VendorMock, Secret: "sk-second-secret-0000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, Targets: []RouteTarget{
+		{CredentialID: second.ID, Model: "echo"},
+		{CredentialID: first.ID, Model: "llama-3"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	route, err := c.ResolveRoute(ctx, ws, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ResolvedTarget{
+		{CredentialID: second.ID, Vendor: provider.VendorMock, Model: "echo", Secret: "sk-second-secret-0000"},
+		{CredentialID: first.ID, Vendor: provider.VendorGroq, Model: "llama-3", Secret: testSecret},
+	}
+	if route.MaxHops != 3 || len(route.Targets) != 2 || route.Targets[0] != want[0] || route.Targets[1] != want[1] {
+		t.Fatalf("route = %+v, want %+v", route, want)
+	}
+
+	for name, args := range map[string][2]string{
+		"another workspace": {other, "chat"},
+		"another case":      {ws, "Chat"},
+		"bad workspace id":  {"not-a-uuid", "chat"},
+	} {
+		if _, err := c.ResolveRoute(ctx, args[0], args[1]); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", name, err)
+		}
+	}
+}

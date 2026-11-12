@@ -29,8 +29,9 @@ type NewGatewayKey struct {
 }
 
 type ActiveGatewayKey struct {
-	ID          string
-	WorkspaceID string
+	ID            string
+	WorkspaceID   string
+	OwnerVerified bool
 }
 
 const gatewayKeyColumns = `id, workspace_id, name, prefix, last_used_at, revoked_at, created_at`
@@ -125,8 +126,12 @@ func (s *Store) RevokeGatewayKey(ctx context.Context, workspaceID, id string) ([
 func (s *Store) ActiveGatewayKeyByHash(ctx context.Context, hash []byte) (*ActiveGatewayKey, error) {
 	var k ActiveGatewayKey
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, workspace_id FROM gateway_keys WHERE hash = $1 AND revoked_at IS NULL`,
-		hash).Scan(&k.ID, &k.WorkspaceID)
+		`SELECT k.id, k.workspace_id, u.email_verified_at IS NOT NULL
+		   FROM gateway_keys k
+		   JOIN workspaces w ON w.id = k.workspace_id
+		   JOIN users u ON u.id = w.owner_id
+		  WHERE k.hash = $1 AND k.revoked_at IS NULL`,
+		hash).Scan(&k.ID, &k.WorkspaceID, &k.OwnerVerified)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

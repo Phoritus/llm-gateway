@@ -1,6 +1,6 @@
 # 06 /v1: authenticate gateway keys, resolve model to route, mount in production
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05
 
 Pipeline steps 1 and 2 for real; this finishes build-order step 3. Run

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
 
@@ -17,14 +19,25 @@ import (
 const maxBodyBytes = 4 << 20
 
 // Deps is everything the data plane needs.
-//
-// Provider is a single upstream until build-order step 3 brings gateway keys
-// and routes, which is when a request's model starts resolving to targets.
 type Deps struct {
-	Provider provider.Provider
+	Keys      KeyAuthenticator
+	Routes    RouteResolver
+	Providers map[provider.Vendor]provider.Provider
 	// Timeout is the deadline on one request, streaming included.
 	Timeout time.Duration
 	Logger  *slog.Logger
+}
+
+// KeyAuthenticator resolves a presented gateway key, returning
+// auth.ErrInvalidGatewayKey for a key that is malformed, unknown or revoked.
+type KeyAuthenticator interface {
+	Authenticate(ctx context.Context, token string) (store.ActiveGatewayKey, error)
+}
+
+// RouteResolver resolves a request's model to the workspace's route,
+// returning store.ErrNotFound for an alias the workspace does not have.
+type RouteResolver interface {
+	ResolveRoute(ctx context.Context, workspaceID, alias string) (*store.ResolvedRoute, error)
 }
 
 func (d Deps) logger() *slog.Logger {

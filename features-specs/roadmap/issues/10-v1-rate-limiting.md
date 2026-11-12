@@ -22,3 +22,7 @@ used by the auth endpoints.
 Spec: [Rate limiting](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+From ticket 06: `/v1` is mounted in production, and a well-formed but unknown
+`gwk_` key costs one unique-index Postgres lookup with nothing in front of it.
+Put an IP-level limit on failed authentications ahead of the per-key limit.
