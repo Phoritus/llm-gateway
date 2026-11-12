@@ -369,3 +369,27 @@ func TestEndpointsCoverOnlyOpenAICompatibleVendors(t *testing.T) {
 		}
 	}
 }
+
+func TestAToolCallFinishesWithToolCalls(t *testing.T) {
+	srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
+		sseHeader(w)
+		event(w, `{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Bangkok\"}"}}]},"finish_reason":"stop"}]}`)
+		event(w, `{"id":"x","object":"chat.completion.chunk","choices":[{"index":1,"delta":{"content":"hi"},"finish_reason":"stop"}]}`)
+		event(w, `[DONE]`)
+	})
+	s, err := newProvider(srv, Endpoint{}, Options{}).ChatStream(context.Background(), chatRequest(t, `{"model":"m","messages":[]}`), provider.Credential{APIKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	chunks, err := drain(t, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := *chunks[0].Choices[0].FinishReason; got != "tool_calls" {
+		t.Errorf("tool call choice finish_reason = %q, want tool_calls", got)
+	}
+	if got := *chunks[1].Choices[0].FinishReason; got != "stop" {
+		t.Errorf("text choice finish_reason = %q, want stop", got)
+	}
+}
