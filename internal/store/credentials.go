@@ -126,19 +126,33 @@ func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credentia
 // Delete removes a credential. It returns ErrNotFound when the workspace has
 // no such one, and ErrCredentialInUse while a route still names it.
 func (c *Credentials) Delete(ctx context.Context, workspaceID, id string) error {
-	if _, err := uuid.Parse(id); err != nil {
-		return ErrNotFound
+	id, err := parseID(id)
+	if err != nil {
+		return err
 	}
-	tag, err := c.store.pool.Exec(ctx,
+	tx, err := c.store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete provider credential: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockWorkspaceForCap(ctx, tx, workspaceID); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM provider_credentials WHERE workspace_id = $1 AND id = $2`, workspaceID, id)
-	if pgCode(err) == foreignKeyViolation {
-		return ErrCredentialInUse
-	}
 	if err != nil {
 		return fmt.Errorf("delete provider credential: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	err = tx.Commit(ctx)
+	if pgCode(err) == foreignKeyViolation {
+		return ErrCredentialInUse
+	}
+	if err != nil {
+		return fmt.Errorf("commit delete provider credential: %w", err)
 	}
 	return nil
 }
@@ -160,7 +174,7 @@ func (c *Credentials) Secret(ctx context.Context, workspaceID, id string) (strin
 	)
 	err = c.store.pool.QueryRow(ctx,
 		`SELECT provider, key_id, ciphertext FROM provider_credentials
-		  WHERE workspace_id = $1 AND id = $2`, workspaceID, id).Scan(&vendor, &keyID, &blob)
+		  WHERE workspace_id = $1 AND id = $2`, workspaceID, rowID).Scan(&vendor, &keyID, &blob)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}

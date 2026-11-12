@@ -23,10 +23,14 @@ CREATE TABLE route_targets (
     model         text    NOT NULL,
     PRIMARY KEY (route_id, position),
     FOREIGN KEY (route_id, workspace_id) REFERENCES routes (id, workspace_id) ON DELETE CASCADE,
-    FOREIGN KEY (credential_id, workspace_id) REFERENCES provider_credentials (id, workspace_id) ON DELETE RESTRICT
+    FOREIGN KEY (credential_id, workspace_id) REFERENCES provider_credentials (id, workspace_id)
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX route_targets_credential_idx ON route_targets (credential_id);
+-- Deferred, not RESTRICT: deleting a workspace cascades to its credentials and,
+-- separately, to its routes' targets. An immediate check fires before the
+-- second cascade has run, so a workspace that had a route could never be deleted.
 
 -- +goose StatementEnd
 

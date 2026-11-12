@@ -59,6 +59,16 @@ func scanRoute(row pgx.Row) (Route, error) {
 	return r, err
 }
 
+// parseID canonicalizes a caller-supplied row id. uuid.Parse accepts forms
+// Postgres does not, such as urn:uuid:, so the raw string must not reach SQL.
+func parseID(id string) (string, error) {
+	u, err := uuid.Parse(id)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return u.String(), nil
+}
+
 func pgCode(err error) string {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -97,8 +107,8 @@ func (s *Store) CreateRoute(ctx context.Context, workspaceID string, in RouteSpe
 	if err := insertTargets(ctx, tx, r.ID, workspaceID, in.Targets); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit route: %w", err)
+	if err := commitRoute(ctx, tx); err != nil {
+		return nil, err
 	}
 	r.Targets = in.Targets
 	return &r, nil
@@ -106,14 +116,22 @@ func (s *Store) CreateRoute(ctx context.Context, workspaceID string, in RouteSpe
 
 // UpdateRoute replaces a route's settings and its whole chain of targets.
 func (s *Store) UpdateRoute(ctx context.Context, workspaceID, id string, in RouteSpec) (*Route, error) {
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, ErrNotFound
+	id, err := parseID(id)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin update route: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Credentials.Delete takes the same lock first. Without it, replacing the
+	// targets and deleting a credential they name lock rows in opposite orders
+	// and deadlock.
+	if err := lockWorkspaceForCap(ctx, tx, workspaceID); err != nil {
+		return nil, err
+	}
 
 	r, err := scanRoute(tx.QueryRow(ctx,
 		`UPDATE routes SET alias = $3, free_first = $4, max_hops = $5, updated_at = now()
@@ -128,17 +146,30 @@ func (s *Store) UpdateRoute(ctx context.Context, workspaceID, id string, in Rout
 	case err != nil:
 		return nil, fmt.Errorf("update route: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM route_targets WHERE route_id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM route_targets WHERE workspace_id = $1 AND route_id = $2`, workspaceID, id); err != nil {
 		return nil, fmt.Errorf("clear route targets: %w", err)
 	}
 	if err := insertTargets(ctx, tx, id, workspaceID, in.Targets); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit route: %w", err)
+	if err := commitRoute(ctx, tx); err != nil {
+		return nil, err
 	}
 	r.Targets = in.Targets
 	return &r, nil
+}
+
+// commitRoute commits a route write. The credential foreign key is deferred, so
+// a credential deleted after the targets were inserted surfaces here.
+func commitRoute(ctx context.Context, tx pgx.Tx) error {
+	err := tx.Commit(ctx)
+	if pgCode(err) == foreignKeyViolation {
+		return ErrUnknownCredential
+	}
+	if err != nil {
+		return fmt.Errorf("commit route: %w", err)
+	}
+	return nil
 }
 
 func insertTargets(ctx context.Context, tx pgx.Tx, routeID, workspaceID string, targets []RouteTarget) error {
@@ -164,7 +195,13 @@ func insertTargets(ctx context.Context, tx pgx.Tx, routeID, workspaceID string, 
 // ListRoutes returns the workspace's routes with their targets, ordered by
 // alias.
 func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, error) {
-	rows, err := s.pool.Query(ctx,
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("begin list routes: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
 		`SELECT `+routeColumns+` FROM routes WHERE workspace_id = $1 ORDER BY alias`, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("list routes: %w", err)
@@ -175,12 +212,14 @@ func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, er
 	}
 
 	index := make(map[string]*Route, len(routes))
+	ids := make([]string, len(routes))
 	for i := range routes {
 		index[routes[i].ID] = &routes[i]
+		ids[i] = routes[i].ID
 	}
-	rows, err = s.pool.Query(ctx,
+	rows, err = tx.Query(ctx,
 		`SELECT route_id, credential_id, model FROM route_targets
-		  WHERE workspace_id = $1 ORDER BY route_id, position`, workspaceID)
+		  WHERE workspace_id = $1 AND route_id = ANY($2::uuid[]) ORDER BY route_id, position`, workspaceID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("list route targets: %w", err)
 	}
@@ -204,8 +243,9 @@ func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, er
 // DeleteRoute removes a route and its targets, or returns ErrNotFound when the
 // workspace has no such route.
 func (s *Store) DeleteRoute(ctx context.Context, workspaceID, id string) error {
-	if _, err := uuid.Parse(id); err != nil {
-		return ErrNotFound
+	id, err := parseID(id)
+	if err != nil {
+		return err
 	}
 	tag, err := s.pool.Exec(ctx, `DELETE FROM routes WHERE workspace_id = $1 AND id = $2`, workspaceID, id)
 	if err != nil {

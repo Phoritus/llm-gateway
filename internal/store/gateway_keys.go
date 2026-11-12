@@ -102,11 +102,12 @@ func (s *Store) ListGatewayKeys(ctx context.Context, workspaceID string) ([]Gate
 // caller can evict it from any cache. ErrNotFound covers a key that is absent,
 // already revoked, or another workspace's.
 func (s *Store) RevokeGatewayKey(ctx context.Context, workspaceID, id string) ([]byte, error) {
-	if _, err := uuid.Parse(id); err != nil {
-		return nil, ErrNotFound
+	id, err := parseID(id)
+	if err != nil {
+		return nil, err
 	}
 	var hash []byte
-	err := s.pool.QueryRow(ctx,
+	err = s.pool.QueryRow(ctx,
 		`UPDATE gateway_keys SET revoked_at = now()
 		  WHERE workspace_id = $1 AND id = $2 AND revoked_at IS NULL
 		 RETURNING hash`, workspaceID, id).Scan(&hash)

@@ -202,3 +202,35 @@ func TestRouteValidation(t *testing.T) {
 		t.Fatalf("a refused create stored a route: %s", list.raw)
 	}
 }
+
+func TestWorkspaceWithARouteCanBeDeleted(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	cred := newCredentialID(t, alice)
+	if res := alice.do(http.MethodPost, "/api/routes", routeBody("chat", target(cred, "m"))); res.status != http.StatusCreated {
+		t.Fatalf("create route: %d %s", res.status, res.raw)
+	}
+	ws := env.workspaceOf("alice@example.com")
+	if _, err := env.store.Pool().Exec(t.Context(), `DELETE FROM workspaces WHERE id = $1`, ws); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+}
+
+func TestURNFormIDsAreNotServerErrors(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	cred := newCredentialID(t, alice)
+	route := alice.do(http.MethodPost, "/api/routes", routeBody("chat", target(cred, "m")))
+	routeID, _ := route.body["id"].(string)
+	key := alice.do(http.MethodPost, "/api/gateway-keys", map[string]any{"name": "k"})
+	keyID, _ := key.body["id"].(string)
+
+	if res := alice.do(http.MethodPut, "/api/routes/urn:uuid:"+routeID, routeBody("chat2", target(cred, "m"))); res.status != http.StatusOK {
+		t.Fatalf("put by urn: %d %s", res.status, res.raw)
+	}
+	for _, path := range []string{"/api/routes/urn:uuid:" + routeID, "/api/credentials/urn:uuid:" + cred, "/api/gateway-keys/urn:uuid:" + keyID} {
+		if res := alice.do(http.MethodDelete, path, nil); res.status != http.StatusNoContent {
+			t.Fatalf("delete %s: %d %s", path, res.status, res.raw)
+		}
+	}
+}
