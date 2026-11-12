@@ -77,3 +77,27 @@ func TestCrossTenantIsolation(t *testing.T) {
 			res.status, res.raw)
 	}
 }
+
+func TestCredentialsAreIsolatedBetweenTenants(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	bob := env.signupAndLogin("bob@example.com")
+
+	created := createCredential(alice, map[string]any{"provider": "groq", "secret": apiTestSecret})
+	if created.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.status, created.raw)
+	}
+	id, _ := created.body["id"].(string)
+
+	list := bob.do(http.MethodGet, "/api/credentials", nil)
+	if list.status != http.StatusOK || strings.Contains(list.raw, id) {
+		t.Fatalf("Bob's list shows Alice's credential: %d %s", list.status, list.raw)
+	}
+	if res := bob.do(http.MethodDelete, "/api/credentials/"+id, nil); res.status != http.StatusNotFound {
+		t.Fatalf("Bob's delete: %d %s", res.status, res.raw)
+	}
+	mine := alice.do(http.MethodGet, "/api/credentials", nil)
+	if !strings.Contains(mine.raw, id) {
+		t.Fatalf("Alice lost her credential: %s", mine.raw)
+	}
+}

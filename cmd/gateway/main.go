@@ -19,6 +19,7 @@ import (
 	"llm-gateway/internal/api"
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
+	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
@@ -93,6 +94,11 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("schema is up to date")
 
+	keyring, err := crypto.NewKeyring(cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+
 	authSvc := auth.NewService(st, auth.Config{
 		SessionTTL:      cfg.SessionTTL,
 		SessionIdleTTL:  cfg.SessionIdleTTL,
@@ -134,12 +140,13 @@ func run(logger *slog.Logger) error {
 	}
 
 	deps := api.Deps{
-		Config:  cfg,
-		Store:   st,
-		Auth:    authSvc,
-		Limiter: ratelimit.New(rdb),
-		Mailer:  mailer,
-		Logger:  logger,
+		Config:      cfg,
+		Store:       st,
+		Credentials: store.NewCredentials(st, keyring),
+		Auth:        authSvc,
+		Limiter:     ratelimit.New(rdb),
+		Mailer:      mailer,
+		Logger:      logger,
 	}
 
 	mux := http.NewServeMux()

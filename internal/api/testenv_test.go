@@ -25,6 +25,7 @@ import (
 
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
+	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -170,12 +171,18 @@ func newTestEnv(t *testing.T) *testEnv {
 		TrustedProxies: nil,
 	})
 
+	keyring, err := crypto.NewKeyring([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+
 	deps := Deps{
-		Config:  cfg,
-		Store:   st,
-		Auth:    authSvc,
-		Limiter: ratelimit.New(rdb),
-		Mailer:  mailer,
+		Config:      cfg,
+		Store:       st,
+		Credentials: store.NewCredentials(st, keyring),
+		Auth:        authSvc,
+		Limiter:     ratelimit.New(rdb),
+		Mailer:      mailer,
 		// Handler errors are expected in several tests; keep them out of the
 		// test output unless something needs debugging.
 		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -201,7 +208,7 @@ func truncateAll(t *testing.T, st *store.Store) {
 	t.Helper()
 	// One statement so the foreign keys never see an inconsistent state.
 	_, err := st.Pool().Exec(context.Background(),
-		`TRUNCATE sessions, email_verification_tokens, password_reset_tokens,
+		`TRUNCATE provider_credentials, sessions, email_verification_tokens, password_reset_tokens,
 		          workspace_members, workspaces, users CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
