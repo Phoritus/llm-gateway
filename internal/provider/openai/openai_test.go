@@ -136,6 +136,12 @@ func TestNoStreamOptionsDropsTheField(t *testing.T) {
 	}
 }
 
+func geminiRateLimit(quotaID string) string {
+	return `[{"error":{"code":429,"message":"You exceeded your current quota.","status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"` + quotaID + `"}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"37s"}]}}]`
+}
+
 func TestClassifiesUpstreamRefusals(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -158,6 +164,12 @@ func TestClassifiesUpstreamRefusals(t *testing.T) {
 		{"context as 413", 413, nil, `{}`, provider.ErrContextTooLong, 0},
 		{"bad parameter", 400, nil, `{"error":{"message":"Unrecognized request argument: foo"}}`, provider.ErrInvalidRequest, 0},
 		{"validation", 422, nil, `{"detail":[{"type":"extra_forbidden"}]}`, provider.ErrInvalidRequest, 0},
+		{"gemini per-minute", 429, nil, geminiRateLimit("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"), provider.ErrRateLimited, 37 * time.Second},
+		{"gemini per-day", 429, nil, geminiRateLimit("GenerateRequestsPerDayPerProjectPerModel-FreeTier"), provider.ErrQuota, 0},
+		{"gemini retry header wins", 429, http.Header{"Retry-After": {"5"}}, geminiRateLimit("PerMinute"), provider.ErrRateLimited, 5 * time.Second},
+		{"gemini bad key", 400, nil, `[{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}]`, provider.ErrAuth, 0},
+		{"gemini context", 400, nil, `[{"error":{"code":400,"message":"The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).","status":"INVALID_ARGUMENT"}}]`, provider.ErrContextTooLong, 0},
+		{"gemini bad argument", 400, nil, `[{"error":{"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}}]`, provider.ErrInvalidRequest, 0},
 		{"gateway timeout", 504, nil, `upstream timed out`, provider.ErrTimeout, 0},
 		{"server error", 500, nil, `<html>oops</html>`, provider.ErrUpstream, 0},
 		{"redirect", 302, http.Header{"Location": {"https://example.com/"}}, ``, provider.ErrUpstream, 0},
@@ -333,13 +345,24 @@ func TestCheckKey(t *testing.T) {
 	}
 }
 
+func TestCheckKeyTakesGoogleBadKeyAsAuth(t *testing.T) {
+	srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`[{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}]`))
+	})
+	p := newProvider(srv, Endpoint{}, Options{})
+	if err := p.CheckKey(context.Background(), provider.Credential{APIKey: testKey}); !errors.Is(err, provider.ErrAuth) {
+		t.Errorf("err = %v, want ErrAuth", err)
+	}
+}
+
 func TestEndpointsCoverOnlyOpenAICompatibleVendors(t *testing.T) {
 	for v, ep := range Endpoints {
 		if !strings.HasPrefix(ep.BaseURL, "https://") || ep.KeyCheckPath == "" {
 			t.Errorf("%s: %+v", v, ep)
 		}
 	}
-	for _, v := range []provider.Vendor{provider.VendorGemini, provider.VendorAnthropic, provider.VendorMock} {
+	for _, v := range []provider.Vendor{provider.VendorAnthropic, provider.VendorMock} {
 		if _, ok := Endpoints[v]; ok {
 			t.Errorf("%s is served by its own adapter", v)
 		}

@@ -39,6 +39,7 @@ var Endpoints = map[provider.Vendor]Endpoint{
 	// Mistral refuses unknown fields, stream_options among them, and puts
 	// usage on its final chunk regardless.
 	provider.VendorMistral: {BaseURL: "https://api.mistral.ai/v1", KeyCheckPath: "/models", NoStreamOptions: true},
+	provider.VendorGemini:  {BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", KeyCheckPath: "/models"},
 }
 
 // Options tunes the connection. Zero values take the defaults.
@@ -243,24 +244,80 @@ func (s *stream) Close() error {
 
 func statusError(resp *http.Response) *provider.Error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-	e := classify(resp.StatusCode, parseError(body), fmt.Sprintf("status %d: %s", resp.StatusCode, truncate(body)))
+	parsed := parseError(body)
+	e := classify(resp.StatusCode, parsed, fmt.Sprintf("status %d: %s", resp.StatusCode, truncate(body)))
 	if e.Kind == provider.ErrRateLimited {
 		e.RetryAfter = retryAfter(resp.Header, time.Now())
+		if e.RetryAfter == 0 {
+			e.RetryAfter = parsed.retryDelay()
+		}
 	}
 	return e
 }
 
 // code is a string at OpenAI and a number at OpenRouter, and either may be
 // absent.
+//
+// Google adds a status and typed details, and wraps the object in an array.
 type errorFields struct {
 	Message string          `json:"message"`
 	Type    string          `json:"type"`
 	Code    json.RawMessage `json:"code"`
+	Status  string          `json:"status"`
+	Details []googleDetail  `json:"details"`
+}
+
+type googleDetail struct {
+	Type       string `json:"@type"`
+	Reason     string `json:"reason"`
+	RetryDelay string `json:"retryDelay"` // a protobuf Duration such as "37s"
+	Violations []struct {
+		QuotaID string `json:"quotaId"`
+	} `json:"violations"`
+}
+
+// dailyQuotaExhausted reports a per-day quota violation, which no wait short
+// of tomorrow clears.
+func (f errorFields) dailyQuotaExhausted() bool {
+	for _, d := range f.Details {
+		for _, v := range d.Violations {
+			if strings.Contains(v.QuotaID, "PerDay") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (f errorFields) hasReason(reason string) bool {
+	for _, d := range f.Details {
+		if d.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func (f errorFields) retryDelay() time.Duration {
+	for _, d := range f.Details {
+		if delay, err := time.ParseDuration(d.RetryDelay); err == nil && delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 // parseError reads OpenAI's {"error": {...}}, or the same fields at the top
-// level, which is where Cerebras puts them.
+// level, which is where Cerebras puts them. Google may wrap either in a
+// one-element array.
 func parseError(body []byte) errorFields {
+	if trimmed := bytes.TrimSpace(body); bytes.HasPrefix(trimmed, []byte("[")) {
+		var items []json.RawMessage
+		if json.Unmarshal(trimmed, &items) != nil || len(items) == 0 {
+			return errorFields{}
+		}
+		body = items[0]
+	}
 	var wrapped struct {
 		Error *errorFields `json:"error"`
 		errorFields
@@ -289,6 +346,10 @@ func classify(status int, parsed errorFields, detail string) *provider.Error {
 	case aboutContextLength(code, parsed.Type, parsed.Message):
 		return kind(provider.ErrContextTooLong)
 	case code == "insufficient_quota":
+		return kind(provider.ErrQuota)
+	case parsed.hasReason("API_KEY_INVALID"):
+		return kind(provider.ErrAuth)
+	case status == http.StatusTooManyRequests && parsed.dailyQuotaExhausted():
 		return kind(provider.ErrQuota)
 	}
 	switch status {
@@ -319,7 +380,7 @@ func aboutContextLength(code, typ, message string) bool {
 	m := strings.ToLower(message)
 	for _, phrase := range []string{
 		"context length", "context_length", "context window", "maximum context",
-		"reduce the length of the messages",
+		"reduce the length of the messages", "exceeds the maximum number of tokens",
 	} {
 		if strings.Contains(m, phrase) {
 			return true
