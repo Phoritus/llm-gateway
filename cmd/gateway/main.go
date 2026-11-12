@@ -23,6 +23,7 @@ import (
 	"llm-gateway/internal/gateway"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
+	"llm-gateway/internal/provider/openai"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -142,10 +143,19 @@ func run(logger *slog.Logger) error {
 
 	gatewayKeys := auth.NewGatewayKeys(st)
 
+	providers := map[provider.Vendor]provider.Provider{}
+	for vendor, endpoint := range openai.Endpoints {
+		providers[vendor] = openai.New(endpoint, openai.Options{})
+	}
+	if !cfg.IsProduction() {
+		providers[provider.VendorMock] = &mock.Provider{}
+	}
+
 	deps := api.Deps{
 		Config:      cfg,
 		Store:       st,
 		Credentials: store.NewCredentials(st, keyring),
+		Providers:   providers,
 		GatewayKeys: gatewayKeys,
 		Auth:        authSvc,
 		Limiter:     ratelimit.New(rdb),
@@ -173,10 +183,6 @@ func run(logger *slog.Logger) error {
 	}
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
 
-	providers := map[provider.Vendor]provider.Provider{}
-	if !cfg.IsProduction() {
-		providers[provider.VendorMock] = &mock.Provider{}
-	}
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      gatewayKeys,
 		Routes:    deps.Credentials,

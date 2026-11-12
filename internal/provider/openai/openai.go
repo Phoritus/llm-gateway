@@ -1,0 +1,353 @@
+package openai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"llm-gateway/internal/provider"
+	"llm-gateway/internal/provider/sse"
+)
+
+// Endpoint is one OpenAI-compatible API.
+type Endpoint struct {
+	BaseURL string
+	// KeyCheckPath is a GET under BaseURL that needs a valid key and
+	// generates nothing.
+	KeyCheckPath string
+	// NoStreamOptions drops stream_options from the request, for an upstream
+	// that refuses the field. Such an upstream must report usage unasked.
+	NoStreamOptions bool
+}
+
+var Endpoints = map[provider.Vendor]Endpoint{
+	provider.VendorOpenAI:   {BaseURL: "https://api.openai.com/v1", KeyCheckPath: "/models"},
+	provider.VendorGroq:     {BaseURL: "https://api.groq.com/openai/v1", KeyCheckPath: "/models"},
+	provider.VendorCerebras: {BaseURL: "https://api.cerebras.ai/v1", KeyCheckPath: "/models"},
+	// OpenRouter lists its models to anyone, so /models proves nothing about
+	// a key; /key describes the key presented.
+	provider.VendorOpenRouter: {BaseURL: "https://openrouter.ai/api/v1", KeyCheckPath: "/key"},
+	// Mistral refuses unknown fields, stream_options among them, and puts
+	// usage on its final chunk regardless.
+	provider.VendorMistral: {BaseURL: "https://api.mistral.ai/v1", KeyCheckPath: "/models", NoStreamOptions: true},
+}
+
+// Options tunes the connection. Zero values take the defaults.
+type Options struct {
+	// DialTimeout bounds the TCP connect and, separately, the TLS handshake.
+	DialTimeout time.Duration
+	// FirstByteTimeout bounds the wait from sending the request to the first
+	// event with data.
+	FirstByteTimeout time.Duration
+}
+
+const (
+	defaultDialTimeout      = 5 * time.Second
+	defaultFirstByteTimeout = 30 * time.Second
+
+	maxErrorBody = 64 << 10
+)
+
+var errFirstByte = errors.New("no first byte in time")
+
+// Provider is one endpoint and the client every workspace's calls to it share.
+type Provider struct {
+	endpoint  Endpoint
+	client    *http.Client
+	firstByte time.Duration
+}
+
+func New(ep Endpoint, opts Options) *Provider {
+	dial := orDefault(opts.DialTimeout, defaultDialTimeout)
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: dial, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: dial,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	return &Provider{
+		endpoint: ep,
+		client: &http.Client{
+			Transport: transport,
+			// No Timeout: it would cut off a long stream.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		firstByte: orDefault(opts.FirstByteTimeout, defaultFirstByteTimeout),
+	}
+}
+
+func orDefault(d, fallback time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return fallback
+}
+
+func (p *Provider) ChatStream(parent context.Context, req *provider.ChatRequest, cred provider.Credential) (provider.Stream, error) {
+	body := *req
+	body.Stream = true
+	if p.endpoint.NoStreamOptions {
+		body.StreamOptions = nil
+	}
+	payload, err := json.Marshal(&body)
+	if err != nil {
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "encode request: " + err.Error()}
+	}
+
+	ctx, cancel := context.WithCancelCause(parent)
+	timer := time.AfterFunc(p.firstByte, func() { cancel(errFirstByte) })
+	release := func() {
+		timer.Stop()
+		cancel(nil)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint.BaseURL+"/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		release()
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		release()
+		return nil, callError(parent, ctx, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		err := statusError(resp)
+		resp.Body.Close()
+		release()
+		return nil, err
+	}
+	if mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mediaType != "text/event-stream" {
+		release()
+		resp.Body.Close()
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "answered 200 with Content-Type " + resp.Header.Get("Content-Type")}
+	}
+	return &stream{
+		parent: parent,
+		ctx:    ctx,
+		body:   resp.Body,
+		events: sse.NewReader(resp.Body),
+		timer:  timer,
+		cancel: release,
+	}, nil
+}
+
+func (p *Provider) CheckKey(ctx context.Context, cred provider.Credential) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint.BaseURL+p.endpoint.KeyCheckPath, nil)
+	if err != nil {
+		return &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return callError(ctx, ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return statusError(resp)
+	}
+	return nil
+}
+
+func callError(parent, ctx context.Context, err error) error {
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	if errors.Is(context.Cause(ctx), errFirstByte) {
+		return &provider.Error{Kind: provider.ErrTimeout, Detail: errFirstByte.Error()}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return &provider.Error{Kind: provider.ErrTimeout, Detail: err.Error()}
+	}
+	return &provider.Error{Kind: provider.ErrUpstream, Detail: err.Error()}
+}
+
+type stream struct {
+	parent context.Context
+	ctx    context.Context
+	body   io.ReadCloser
+	events *sse.Reader
+	timer  *time.Timer
+	cancel func()
+
+	sawFinishReason bool
+	done            bool
+}
+
+func (s *stream) Next() (*provider.ChatChunk, error) {
+	if s.done {
+		return nil, io.EOF
+	}
+	ev, err := s.events.Next()
+	if err != nil {
+		s.done = true
+		if errors.Is(err, io.EOF) {
+			if s.sawFinishReason {
+				return nil, io.EOF
+			}
+			return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before it finished"}
+		}
+		return nil, callError(s.parent, s.ctx, err)
+	}
+	s.timer.Stop()
+
+	if string(ev.Data) == "[DONE]" {
+		s.done = true
+		return nil, io.EOF
+	}
+	var payload struct {
+		provider.ChatChunk
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		s.done = true
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "malformed chunk: " + truncate(ev.Data)}
+	}
+	// Some upstreams report a failure after the stream started as an event
+	// with an error object, since the status line is long gone.
+	if len(payload.Error) > 0 && string(payload.Error) != "null" {
+		s.done = true
+		return nil, eventError(payload.Error)
+	}
+	chunk := payload.ChatChunk
+	for _, ch := range chunk.Choices {
+		if ch.FinishReason != nil {
+			s.sawFinishReason = true
+		}
+	}
+	return &chunk, nil
+}
+
+func (s *stream) Close() error {
+	s.done = true
+	s.cancel()
+	return s.body.Close()
+}
+
+func statusError(resp *http.Response) *provider.Error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	e := classify(resp.StatusCode, parseError(body), fmt.Sprintf("status %d: %s", resp.StatusCode, truncate(body)))
+	if e.Kind == provider.ErrRateLimited {
+		e.RetryAfter = retryAfter(resp.Header, time.Now())
+	}
+	return e
+}
+
+// code is a string at OpenAI and a number at OpenRouter, and either may be
+// absent.
+type errorFields struct {
+	Message string          `json:"message"`
+	Type    string          `json:"type"`
+	Code    json.RawMessage `json:"code"`
+}
+
+// parseError reads OpenAI's {"error": {...}}, or the same fields at the top
+// level, which is where Cerebras puts them.
+func parseError(body []byte) errorFields {
+	var wrapped struct {
+		Error *errorFields `json:"error"`
+		errorFields
+	}
+	_ = json.Unmarshal(body, &wrapped)
+	if wrapped.Error != nil {
+		return *wrapped.Error
+	}
+	return wrapped.errorFields
+}
+
+// eventError classifies an error event inside a stream, where the status
+// line is long gone. OpenRouter's carry the HTTP status as the code.
+func eventError(raw json.RawMessage) *provider.Error {
+	var fields errorFields
+	_ = json.Unmarshal(raw, &fields)
+	status, _ := strconv.Atoi(strings.Trim(string(fields.Code), `"`))
+	return classify(status, fields, truncate(raw))
+}
+
+// classify picks the kind for an error. status is 0 when none is known.
+func classify(status int, parsed errorFields, detail string) *provider.Error {
+	code := strings.Trim(string(parsed.Code), `"`)
+	kind := func(k error) *provider.Error { return &provider.Error{Kind: k, Detail: detail} }
+	switch {
+	case aboutContextLength(code, parsed.Type, parsed.Message):
+		return kind(provider.ErrContextTooLong)
+	case code == "insufficient_quota":
+		return kind(provider.ErrQuota)
+	}
+	switch status {
+	case http.StatusUnauthorized:
+		return kind(provider.ErrAuth)
+	case http.StatusPaymentRequired:
+		return kind(provider.ErrQuota)
+	case http.StatusForbidden, http.StatusNotFound:
+		return kind(provider.ErrModelUnavailable)
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return kind(provider.ErrTimeout)
+	case http.StatusRequestEntityTooLarge:
+		return kind(provider.ErrContextTooLong)
+	case http.StatusTooManyRequests:
+		return kind(provider.ErrRateLimited)
+	case http.StatusBadRequest, http.StatusUnprocessableEntity:
+		return kind(provider.ErrInvalidRequest)
+	}
+	return kind(provider.ErrUpstream)
+}
+
+// aboutContextLength recognises the ways these upstreams say a request is too
+// long for the model: OpenAI's code, and the wording of those without one.
+func aboutContextLength(code, typ, message string) bool {
+	if code == "context_length_exceeded" || typ == "context_length_exceeded" {
+		return true
+	}
+	m := strings.ToLower(message)
+	for _, phrase := range []string{
+		"context length", "context_length", "context window", "maximum context",
+		"reduce the length of the messages",
+	} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryAfter reads how long the upstream asked to be left alone: OpenAI's
+// millisecond header when present, else Retry-After in seconds or as a date.
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	if ms, err := strconv.ParseFloat(strings.TrimSpace(h.Get("Retry-After-Ms")), 64); err == nil && ms > 0 {
+		return time.Duration(ms * float64(time.Millisecond))
+	}
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
+}
+
+func truncate(b []byte) string {
+	const limit = 300
+	if len(b) > limit {
+		return strings.ToValidUTF8(string(b[:limit]), "") + "..."
+	}
+	return strings.ToValidUTF8(string(b), "?")
+}

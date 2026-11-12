@@ -15,6 +15,14 @@ var (
 	ErrContextTooLong = errors.New("request exceeds the model's context window")
 	ErrUpstream       = errors.New("upstream failed")
 	ErrTimeout        = errors.New("upstream timed out")
+
+	// ErrModelUnavailable is a credential that works but may not use the
+	// model: the upstream does not know it, or this account may not call it.
+	ErrModelUnavailable = errors.New("upstream model unavailable to this credential")
+
+	// ErrInvalidRequest is the upstream refusing the request itself (a 400 or
+	// 422 that is not about context length).
+	ErrInvalidRequest = errors.New("upstream rejected the request as invalid")
 )
 
 // Error is an upstream failure with what the caller needs beyond its kind.

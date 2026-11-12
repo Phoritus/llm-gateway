@@ -19,6 +19,7 @@ import (
 
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/config"
+	"llm-gateway/internal/provider"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -38,6 +39,7 @@ type Deps struct {
 	Config      *config.Config
 	Store       *store.Store
 	Credentials *store.Credentials
+	Providers   map[provider.Vendor]provider.Provider
 	GatewayKeys *auth.GatewayKeys
 	Auth        *auth.Service
 	Limiter     *ratelimit.Limiter
@@ -109,6 +111,7 @@ func Routes(d Deps) http.Handler {
 			r.Get("/credentials", d.handleListCredentials)
 			r.Post("/credentials", d.handleCreateCredential)
 			r.Delete("/credentials/{id}", d.handleDeleteCredential)
+			r.Post("/credentials/{id}/test", d.handleTestCredential)
 
 			r.Get("/gateway-keys", d.handleListGatewayKeys)
 			r.Post("/gateway-keys", d.handleCreateGatewayKey)

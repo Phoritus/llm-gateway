@@ -183,6 +183,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		Config:      cfg,
 		Store:       st,
 		Credentials: store.NewCredentials(st, keyring),
+		Providers: map[provider.Vendor]provider.Provider{
+			provider.VendorMock: &mock.Provider{},
+			provider.VendorGroq: keyChecker{valid: apiTestSecret},
+		},
 		GatewayKeys: auth.NewGatewayKeys(st),
 		Auth:        authSvc,
 		Limiter:     ratelimit.New(rdb),
@@ -201,7 +205,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      deps.GatewayKeys,
 		Routes:    deps.Credentials,
-		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: &mock.Provider{}},
+		Providers: deps.Providers,
 		Timeout:   time.Minute,
 		Logger:    deps.Logger,
 	})))

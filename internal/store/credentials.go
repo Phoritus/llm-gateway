@@ -157,15 +157,20 @@ func (c *Credentials) Delete(ctx context.Context, workspaceID, id string) error 
 	return nil
 }
 
-// Secret opens a credential's key. The error never carries the plaintext.
-func (c *Credentials) Secret(ctx context.Context, workspaceID, id string) (string, error) {
+type UnsealedCredential struct {
+	Vendor provider.Vendor
+	Secret string
+}
+
+// Unseal opens a credential's key. The error never carries the plaintext.
+func (c *Credentials) Unseal(ctx context.Context, workspaceID, id string) (UnsealedCredential, error) {
 	ws, err := uuid.Parse(workspaceID)
 	if err != nil {
-		return "", ErrNotFound
+		return UnsealedCredential{}, ErrNotFound
 	}
 	rowID, err := uuid.Parse(id)
 	if err != nil {
-		return "", ErrNotFound
+		return UnsealedCredential{}, ErrNotFound
 	}
 	var sealed sealedCredential
 	err = c.store.pool.QueryRow(ctx,
@@ -173,12 +178,16 @@ func (c *Credentials) Secret(ctx context.Context, workspaceID, id string) (strin
 		  WHERE workspace_id = $1 AND id = $2`, workspaceID, rowID).
 		Scan(&sealed.id, &sealed.vendor, &sealed.keyID, &sealed.blob)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNotFound
+		return UnsealedCredential{}, ErrNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("select provider credential: %w", err)
+		return UnsealedCredential{}, fmt.Errorf("select provider credential: %w", err)
 	}
-	return c.open(ws, sealed)
+	secret, err := c.open(ws, sealed)
+	if err != nil {
+		return UnsealedCredential{}, err
+	}
+	return UnsealedCredential{Vendor: sealed.vendor, Secret: secret}, nil
 }
 
 // ResolvedRoute is a route as /v1 calls it: its chain in order, each target

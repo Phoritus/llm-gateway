@@ -53,9 +53,9 @@ func TestCredentialRoundTrip(t *testing.T) {
 		t.Fatalf("list = %+v, want newest first", list)
 	}
 
-	got, err := c.Secret(ctx, ws, first.ID)
-	if err != nil || got != testSecret {
-		t.Fatalf("Secret = %q, %v", got, err)
+	got, err := c.Unseal(ctx, ws, first.ID)
+	if err != nil || got.Secret != testSecret || got.Vendor != first.Provider {
+		t.Fatalf("Unseal = %+v, %v", got, err)
 	}
 
 	var stored []byte
@@ -69,8 +69,8 @@ func TestCredentialRoundTrip(t *testing.T) {
 	if err := c.Delete(ctx, ws, first.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := c.Secret(ctx, ws, first.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Secret after delete: %v", err)
+	if _, err := c.Unseal(ctx, ws, first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Unseal after delete: %v", err)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestCredentialsAreWorkspaceScoped(t *testing.T) {
 	if list, err := c.List(ctx, bob); err != nil || len(list) != 0 {
 		t.Fatalf("Bob's list = %+v, %v", list, err)
 	}
-	if _, err := c.Secret(ctx, bob, cred.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := c.Unseal(ctx, bob, cred.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Bob's Secret: %v", err)
 	}
 	if err := c.Delete(ctx, bob, cred.ID); !errors.Is(err, ErrNotFound) {
@@ -101,7 +101,7 @@ func TestMalformedCredentialIDIsNotFound(t *testing.T) {
 	c := newTestCredentials(t, st)
 	ws := signup(t, st, "a@example.com").WorkspaceID
 
-	if _, err := c.Secret(context.Background(), ws, "not-a-uuid"); !errors.Is(err, ErrNotFound) {
+	if _, err := c.Unseal(context.Background(), ws, "not-a-uuid"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Secret: %v", err)
 	}
 	if err := c.Delete(context.Background(), ws, "not-a-uuid"); !errors.Is(err, ErrNotFound) {
@@ -130,12 +130,12 @@ func TestCredentialCiphertextIsBoundToItsRow(t *testing.T) {
 	}
 
 	copyOnto(src.ID, dst.ID)
-	if _, err := c.Secret(ctx, ws, dst.ID); !errors.Is(err, crypto.ErrOpen) {
+	if _, err := c.Unseal(ctx, ws, dst.ID); !errors.Is(err, crypto.ErrOpen) {
 		t.Fatalf("ciphertext copied onto another row opened: %v", err)
 	}
 
 	copyOnto(foreign.ID, src.ID)
-	if _, err := c.Secret(ctx, ws, src.ID); !errors.Is(err, crypto.ErrOpen) {
+	if _, err := c.Unseal(ctx, ws, src.ID); !errors.Is(err, crypto.ErrOpen) {
 		t.Fatalf("ciphertext copied from another tenant opened: %v", err)
 	}
 }
@@ -150,9 +150,9 @@ func TestCredentialProviderIsBoundToItsCiphertext(t *testing.T) {
 	if _, err := st.pool.Exec(ctx, `UPDATE provider_credentials SET provider = 'openai' WHERE id = $1`, cred.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.Secret(ctx, ws, cred.ID)
+	_, err := c.Unseal(ctx, ws, cred.ID)
 	if !errors.Is(err, crypto.ErrOpen) {
-		t.Fatalf("Secret after provider change: %v", err)
+		t.Fatalf("Unseal after provider change: %v", err)
 	}
 	if strings.Contains(err.Error(), testSecret) {
 		t.Fatal("error contains the secret")

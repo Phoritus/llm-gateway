@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,71 @@ func TestAssemblerJoinsDeltasPerChoice(t *testing.T) {
 	}
 	if r.Usage == nil || r.Usage.TotalTokens != 5 {
 		t.Errorf("usage = %+v", r.Usage)
+	}
+}
+
+func TestAssemblerMergesToolCallDeltas(t *testing.T) {
+	tc := "tool_calls"
+	var a Assembler
+	a.Add(&ChatChunk{ID: "c", Choices: []ChunkChoice{{Delta: Delta{Role: "assistant",
+		ToolCalls: json.RawMessage(`[{"index":0,"id":"call_a","type":"function","function":{"name":"get_weather","arguments":""}}]`)}}}})
+	a.Add(&ChatChunk{ID: "c", Choices: []ChunkChoice{{Delta: Delta{
+		ToolCalls: json.RawMessage(`[{"index":0,"function":{"arguments":"{\"city\":"}},{"index":1,"id":"call_b","function":{"name":"now","arguments":"{}"}}]`)}}}})
+	a.Add(&ChatChunk{ID: "c", Choices: []ChunkChoice{{Delta: Delta{
+		ToolCalls: json.RawMessage(`[{"index":0,"function":{"arguments":"\"Oslo\"}"}},{"index":500},{"index":-1}]`)}}}})
+	a.Add(&ChatChunk{ID: "c", Choices: []ChunkChoice{{Delta: Delta{ToolCalls: json.RawMessage(`"garbage"`)}, FinishReason: &tc}}})
+
+	msg := a.Response().Choices[0].Message
+	want := []ToolCall{
+		{ID: "call_a", Type: "function", Function: ToolFunction{Name: "get_weather", Arguments: `{"city":"Oslo"}`}},
+		{ID: "call_b", Type: "function", Function: ToolFunction{Name: "now", Arguments: `{}`}},
+	}
+	if len(msg.ToolCalls) != len(want) {
+		t.Fatalf("tool calls = %+v, want %+v", msg.ToolCalls, want)
+	}
+	for i := range want {
+		if msg.ToolCalls[i] != want[i] {
+			t.Errorf("tool call %d = %+v, want %+v", i, msg.ToolCalls[i], want[i])
+		}
+	}
+	b, _ := json.Marshal(msg)
+	if !strings.Contains(string(b), `"tool_calls":[`) {
+		t.Errorf("message JSON lacks tool_calls: %s", b)
+	}
+}
+
+func TestChatRequestKeepsFieldsItDoesNotModel(t *testing.T) {
+	in := `{"model":"m","messages":[{"role":"user","content":"hi"}],"n":2,"seed":7,` +
+		`"response_format":{"type":"json_object"},"frequency_penalty":0.5,"MODEL":"shadow"}`
+	var req ChatRequest
+	if err := json.Unmarshal([]byte(in), &req); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := req.Extra["MODEL"]; ok {
+		t.Error("a case variant of a modelled field was kept as an extra")
+	}
+	req.Model = "upstream-model"
+	req.Stream = true
+	out, err := json.Marshal(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"model": `"upstream-model"`, "stream": `true`, "n": `2`, "seed": `7`,
+		"response_format": `{"type":"json_object"}`, "frequency_penalty": `0.5`,
+	} {
+		if string(got[key]) != want {
+			t.Errorf("%s = %s, want %s (body %s)", key, got[key], want, out)
+		}
+	}
+
+	req.Extra = map[string]json.RawMessage{"model": json.RawMessage(`"from-extra"`)}
+	out, _ = json.Marshal(req)
+	if !strings.Contains(string(out), `"model":"upstream-model"`) {
+		t.Errorf("an extra overrode a modelled field: %s", out)
 	}
 }

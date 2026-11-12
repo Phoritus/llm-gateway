@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
+	"llm-gateway/internal/telemetry"
 )
 
 const (
@@ -95,6 +98,65 @@ func (d Deps) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 		d.serverErrorf(w, r, err, "delete credential")
 	default:
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+const keyTestTimeout = 10 * time.Second
+
+type keyTestResult struct {
+	OK      bool   `json:"ok"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// handleTestCredential asks the credential's provider whether it accepts the
+// key. The answer is 200 either way: the test ran, and its outcome is the
+// body. The upstream's own message is not passed on, as on /v1.
+func (d Deps) handleTestCredential(w http.ResponseWriter, r *http.Request) {
+	cred, err := d.Credentials.Unseal(r.Context(), auth.WorkspaceID(r.Context()), chi.URLParam(r, "id"))
+	if errors.Is(err, store.ErrNotFound) {
+		notFound(w, r)
+		return
+	}
+	if err != nil {
+		d.serverErrorf(w, r, err, "unseal credential")
+		return
+	}
+	adapter, ok := d.Providers[cred.Vendor]
+	if !ok {
+		writeJSON(w, http.StatusOK, keyTestResult{Code: "provider_unavailable",
+			Message: "This provider is not available on this gateway yet."})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), keyTestTimeout)
+	defer cancel()
+	err = adapter.CheckKey(ctx, provider.Credential{APIKey: cred.Secret})
+	if r.Context().Err() != nil {
+		return
+	}
+	if err != nil {
+		d.logger().InfoContext(r.Context(), "credential test failed",
+			slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
+			slog.String("vendor", string(cred.Vendor)), slog.String("error", err.Error()))
+	}
+	writeJSON(w, http.StatusOK, keyTestOutcome(err))
+}
+
+func keyTestOutcome(err error) keyTestResult {
+	switch {
+	case err == nil:
+		return keyTestResult{OK: true}
+	case errors.Is(err, provider.ErrAuth), errors.Is(err, provider.ErrModelUnavailable):
+		return keyTestResult{Code: "key_rejected", Message: "The provider rejected this key."}
+	case errors.Is(err, provider.ErrQuota):
+		return keyTestResult{Code: "quota_exhausted", Message: "The provider accepted this key, but its account has no quota or credit left."}
+	case errors.Is(err, provider.ErrRateLimited):
+		return keyTestResult{Code: "rate_limited", Message: "The provider is rate limiting this key. Try the test again later."}
+	case errors.Is(err, provider.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
+		return keyTestResult{Code: "provider_timeout", Message: "The provider did not answer in time."}
+	default:
+		return keyTestResult{Code: "provider_error", Message: "The provider could not check this key."}
 	}
 }
 
