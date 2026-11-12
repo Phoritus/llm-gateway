@@ -99,13 +99,13 @@ func (d Deps) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseVendorField(w http.ResponseWriter, raw string, production bool) (provider.Vendor, bool) {
-	vendor, ok := provider.ParseVendor(raw)
-	if ok && !(production && vendor.DevelopmentOnly()) {
+	usable := func(v provider.Vendor) bool { return !production || !v.DevelopmentOnly() }
+	if vendor, ok := provider.ParseVendor(raw); ok && usable(vendor) {
 		return vendor, true
 	}
 	var names []string
 	for _, v := range provider.Vendors() {
-		if !(production && v.DevelopmentOnly()) {
+		if usable(v) {
 			names = append(names, string(v))
 		}
 	}
