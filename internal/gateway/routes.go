@@ -25,7 +25,17 @@ type Deps struct {
 	Providers map[provider.Vendor]provider.Provider
 	// Timeout is the deadline on one request, streaming included.
 	Timeout time.Duration
-	Logger  *slog.Logger
+	// Limiter and Limits bound what a key and a workspace may spend. Both are
+	// required: there is no unlimited mode to fall into by leaving one out.
+	Limiter RateLimiter
+	Limits  Limits
+	// ClientKey names the client's address for the limit on failed
+	// authentications. It must be something the client cannot choose.
+	ClientKey func(*http.Request) string
+	Logger    *slog.Logger
+
+	inflight *inflight
+	blocks   *authBlocks
 }
 
 // KeyAuthenticator resolves a presented gateway key, returning
@@ -49,6 +59,12 @@ func (d Deps) logger() *slog.Logger {
 
 // Routes builds the /v1 handler. It expects the /v1 prefix stripped.
 func Routes(d Deps) http.Handler {
+	if d.Limiter == nil || d.ClientKey == nil {
+		panic("gateway: Routes needs a Limiter and a ClientKey")
+	}
+	d.inflight = &inflight{count: map[string]int{}}
+	d.blocks = &authBlocks{until: map[string]time.Time{}}
+
 	r := chi.NewRouter()
 	r.Use(routeTelemetry)
 	r.Post("/chat/completions", d.handleChatCompletions)
