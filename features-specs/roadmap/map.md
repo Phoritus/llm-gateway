@@ -28,7 +28,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | # | Work | Status | Blocked by |
 | --- | --- | --- | --- |
 | [01](issues/01-merge-pr-4.md) | Merge PR #4 (step 2: mock provider through /v1) | `resolved` | - |
-| [02](issues/02-crypto-seal-open.md) | internal/crypto: AES-256-GCM seal and open | `ready-for-agent` | 01 |
+| [02](issues/02-crypto-seal-open.md) | internal/crypto: AES-256-GCM seal and open | `resolved` | 01 |
 | [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `ready-for-agent` | 02 |
 | [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `ready-for-agent` | 01 |
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `ready-for-agent` | 03 |
@@ -57,6 +57,13 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   on the socket as well as the context; `/v1` is mounted only outside
   production until ticket 06. See
   [design.md](../mock-provider-v1/design.md) and PR #4.
+- Ticket 02 (crypto): a `Keyring` built from the current master key plus any
+  older ones; `Seal(plaintext, aad)` returns `Sealed{KeyID, Ciphertext}`, two
+  columns so rotation can query `key_id <> current`. The key id is derived
+  from the key (truncated HMAC), so rotation needs no new config. Callers pass
+  the row's context (workspace and credential id) as `aad`, so a ciphertext
+  copied to another tenant's row does not open. The key id is not in the AAD:
+  it already selects the key, and a rewritten id fails GCM on its own.
 
 ## Fog
 
