@@ -22,3 +22,9 @@ Pipeline steps 1 and 2 for real; this finishes build-order step 3. Run
   "Email verification is required").
 
 ## Comments
+
+Note from ticket 04: `auth.GatewayKeys.Authenticate` caches hits only, so a
+well-formed but unknown `gwk_` token costs one indexed Postgres query. Auth runs
+before the per-key rate limit, so put an IP-level limit ahead of it or add a
+short negative cache. The handler strips `Bearer ` itself and maps
+`ErrInvalidGatewayKey` to the OpenAI-shaped 401.

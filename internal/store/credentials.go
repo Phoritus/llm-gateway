@@ -72,11 +72,8 @@ func (c *Credentials) Create(ctx context.Context, workspaceID string, in NewCred
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Under READ COMMITTED, concurrent inserts each count the rows before any
-	// of them commits and all pass the cap. Locking the workspace row
-	// serializes creates within one workspace and leaves others unaffected.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM workspaces WHERE id = $1 FOR UPDATE`, workspaceID); err != nil {
-		return nil, fmt.Errorf("lock workspace: %w", err)
+	if err := lockWorkspaceForCap(ctx, tx, workspaceID); err != nil {
+		return nil, err
 	}
 
 	var out Credential

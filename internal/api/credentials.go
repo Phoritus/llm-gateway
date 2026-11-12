@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	maxCredentialName = 100
-	minSecretLen      = 20
-	maxSecretLen      = 512
+	maxName      = 100
+	minSecretLen = 20
+	maxSecretLen = 512
 )
 
 type credentialView struct {
@@ -60,9 +60,8 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if utf8.RuneCountInString(name) > maxCredentialName || strings.ContainsFunc(name, unicode.IsControl) {
-		invalidField(w, "name", "name must be at most 100 characters, with no control characters.")
+	name, ok := parseNameField(w, req.Name)
+	if !ok {
 		return
 	}
 	secret := strings.TrimSpace(req.Secret)
@@ -106,6 +105,15 @@ func parseVendorField(w http.ResponseWriter, raw string) (provider.Vendor, bool)
 		invalidField(w, "provider", "provider must be one of: "+strings.Join(names, ", ")+".")
 	}
 	return vendor, ok
+}
+
+func parseNameField(w http.ResponseWriter, raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(name) > maxName || strings.ContainsFunc(name, unicode.IsControl) {
+		invalidField(w, "name", "name must be at most 100 characters, with no control characters.")
+		return "", false
+	}
+	return name, true
 }
 
 func validSecret(s string) bool {

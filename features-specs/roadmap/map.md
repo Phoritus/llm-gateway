@@ -30,7 +30,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [01](issues/01-merge-pr-4.md) | Merge PR #4 (step 2: mock provider through /v1) | `resolved` | - |
 | [02](issues/02-crypto-seal-open.md) | internal/crypto: AES-256-GCM seal and open | `resolved` | 01 |
 | [03](issues/03-provider-credentials.md) | Provider credentials: table, store, /api/credentials | `resolved` | 02 |
-| [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `ready-for-agent` | 01 |
+| [04](issues/04-gateway-keys.md) | Gateway keys: table, minting, /api/gateway-keys, in-memory cache | `resolved` | 01 |
 | [05](issues/05-routes.md) | Routes: tables and /api/routes CRUD | `ready-for-agent` | 03 |
 | [06](issues/06-v1-auth-and-routing.md) | /v1: authenticate gateway keys, resolve model to route, mount in production | `ready-for-agent` | 04, 05 |
 | [07](issues/07-openai-adapter.md) | provider/openai: OpenAI-compatible adapter with a base URL | `ready-for-agent` | 06 |
@@ -70,9 +70,16 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   user-supplied URL is the Phase 2 SSRF surface; ticket 07 attaches base URLs
   in code. A workspace holds at most 50 credentials, enforced by locking the
   workspace row, since a bare count-then-insert overshot under concurrency.
+- Ticket 04 (gateway keys): a key is `gwk_` plus 32 random bytes in base64url;
+  only its SHA-256 and a 12-character display prefix are stored. `auth.GatewayKeys`
+  authenticates through a 1-second in-process cache: the revoking instance
+  evicts at once, other instances stop accepting within the TTL, so no
+  cross-instance invalidation channel is needed. Revoke is a soft delete
+  (`revoked_at`) so usage rows can still name the key; at most 50 unrevoked
+  keys per workspace. `last_used_at` is batched in memory and written once a
+  minute per instance, and once more on shutdown.
 
 ## Fog
 
 - How `mock` is exposed once routes exist (ticket 06).
 - Whether /v1 rate limiting fails open or closed when Redis is down (ticket 10).
-- How a revoked gateway key is evicted on every instance (ticket 04).

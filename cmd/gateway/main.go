@@ -139,10 +139,13 @@ func run(logger *slog.Logger) error {
 			"which is development only -- production refuses to start without one")
 	}
 
+	gatewayKeys := auth.NewGatewayKeys(st)
+
 	deps := api.Deps{
 		Config:      cfg,
 		Store:       st,
 		Credentials: store.NewCredentials(st, keyring),
+		GatewayKeys: gatewayKeys,
 		Auth:        authSvc,
 		Limiter:     ratelimit.New(rdb),
 		Mailer:      mailer,
@@ -200,8 +203,18 @@ func run(logger *slog.Logger) error {
 	}
 
 	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
-	defer stopSweeper()
+	flusherDone := make(chan struct{})
+	// Waits for the flusher's last write on every return path, before the
+	// deferred pool close.
+	defer func() {
+		stopSweeper()
+		<-flusherDone
+	}()
 	go authSvc.RunSweeper(sweeperCtx, 0, logger)
+	go func() {
+		defer close(flusherDone)
+		gatewayKeys.RunLastUsedFlusher(sweeperCtx, logger)
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -229,7 +242,6 @@ func run(logger *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown timed out", slog.String("error", err.Error()))
 	}
-	stopSweeper()
 	logger.Info("stopped")
 	return nil
 }

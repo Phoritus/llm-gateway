@@ -1,6 +1,6 @@
 # 04 Gateway keys: table, minting, /api/gateway-keys, in-memory cache
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 Build-order step 3. CLAUDE.md notes "Gateway keys are not written yet".

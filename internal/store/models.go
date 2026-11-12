@@ -77,5 +77,5 @@ type SessionInput struct {
 }
 
 // ErrLimitReached means the workspace already holds the maximum number of
-// provider credentials.
-var ErrLimitReached = errors.New("store: credential limit reached")
+// provider credentials or unrevoked gateway keys.
+var ErrLimitReached = errors.New("store: workspace limit reached")
