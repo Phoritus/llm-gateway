@@ -88,6 +88,9 @@ func (d Deps) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		notFound(w, r)
+	case errors.Is(err, store.ErrCredentialInUse):
+		writeError(w, http.StatusConflict, typeInvalidRequest, "credential_in_use",
+			"A route still uses this credential. Remove it from every route first.")
 	case err != nil:
 		d.serverErrorf(w, r, err, "delete credential")
 	default:
@@ -117,7 +120,11 @@ func parseNameField(w http.ResponseWriter, raw string) (string, bool) {
 }
 
 func validSecret(s string) bool {
-	if len(s) < minSecretLen || len(s) > maxSecretLen {
+	return visibleASCII(s, minSecretLen, maxSecretLen)
+}
+
+func visibleASCII(s string, minLen, maxLen int) bool {
+	if len(s) < minLen || len(s) > maxLen {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
