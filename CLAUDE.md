@@ -16,15 +16,16 @@ adding files.
 | `api` | Auth endpoints, health probes, `GET/POST /api/credentials`, `DELETE /api/credentials/{id}` (last 4 characters only) and `POST /api/credentials/{id}/test`, `GET/POST /api/gateway-keys` and `DELETE /api/gateway-keys/{id}` (full key returned once, at creation; delete revokes), `GET/POST /api/routes` and `PUT/DELETE /api/routes/{id}` (PUT replaces the ordered target chain) |
 | `ratelimit` | Redis token bucket and its Lua script, used so far only by the auth endpoints |
 | `provider`, `provider/mock` | `Vendor`, the fixed set of upstreams a credential can name, including `mock`, which production refuses. The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
-| `gateway` | `POST /v1/chat/completions`, streaming and not. Authenticates the bearer gateway key (and the owner's email verification), resolves `model` to the workspace's route and calls its first target through the adapter for the credential's vendor. Mounted in production with the OpenAI-compatible adapters; the mock is registered outside production only |
+| `gateway` | `POST /v1/chat/completions`, streaming and not. Authenticates the bearer gateway key (and the owner's email verification), resolves `model` to the workspace's route and calls its first target through the adapter for the credential's vendor. Mounted in production with the OpenAI-compatible and Anthropic adapters; the mock is registered outside production only |
 | `crypto` | AES-256-GCM `Keyring`: `Seal`/`Open` with caller-supplied AAD, a key id derived from each key, older keys accepted for rotation. Used by `store.Credentials`, keyed by `config.MasterKey` |
 | `provider/openai`, `provider/sse` | One adapter per OpenAI-compatible vendor (OpenAI, Groq, Cerebras, OpenRouter, Mistral, Gemini), base URLs fixed in `openai.Endpoints`; a first-byte timer; status and error-body classification into the typed errors, Google's array-wrapped error shape included; `CheckKey` for the credential test. `sse` is the shared event-stream reader |
-| `router`, `cache`, `usage`, `anthropic` | Still a one-line `doc.go` |
+| `provider/anthropic` | Translates OpenAI chat to the Messages API (`anthropic-version: 2026-10-21`) and its event stream back to OpenAI chunks. System and developer messages go to top-level `system`, tool messages become `tool_result` blocks, same-role turns merge; `temperature` and `top_p` are dropped. A request with no Anthropic equivalent (`n` > 1, `json_object`, an unknown content part) is refused locally as `ErrInvalidRequest` |
+| `router`, `cache`, `usage` | Still a one-line `doc.go` |
 
 Build-order steps 1 to 3 are done: `/v1` authenticates gateway keys and
 resolves routes. **The work left is an ordered ticket list in
 `features-specs/roadmap/map.md`** -- read it at the start of a session and take
-the next unblocked ticket. Next is the Anthropic adapter (ticket 09). The step
+the next unblocked ticket. Next is /v1 rate limiting (ticket 10). The step
 2 design is in `features-specs/mock-provider-v1/design.md`.
 
 The design is already settled and written down. `Backend Architecture BYOK LLM Gateway (Go).md` at the repo root is the authoritative spec — read it before any non-trivial change. It also exists as a live Claude Docs document at https://claude.ai/artifact/KiGTMPuYo84W15uVSzNM1j, which is read through the Claude Docs connector rather than WebFetch. The two can drift; prefer the local file for code decisions.

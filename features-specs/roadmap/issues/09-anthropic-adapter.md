@@ -1,6 +1,6 @@
 # 09 provider/anthropic adapter
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 07
 
 Build-order step 4. Translate OpenAI chat format to and from Anthropic
