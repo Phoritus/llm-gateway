@@ -34,7 +34,7 @@ func apply(t *testing.T, env map[string]string) {
 		"DATABASE_URL", "DATABASE_URL_LOCAL", "REDIS_URL", "REDIS_URL_LOCAL",
 		"MASTER_KEY", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
-		"VERIFICATION_TTL", "RESET_TTL", "OTEL_EXPORTER_OTLP_ENDPOINT",
+		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -277,6 +277,24 @@ func TestLoadOwnsTheMailedTokenLifetimes(t *testing.T) {
 	apply(t, env)
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() with a negative RESET_TTL = nil error, want a refusal")
+	}
+}
+
+func TestLoadOwnsTheV1RequestTimeout(t *testing.T) {
+	apply(t, productionEnv(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if cfg.V1RequestTimeout != 5*time.Minute {
+		t.Errorf("V1RequestTimeout = %s, want 5m", cfg.V1RequestTimeout)
+	}
+
+	env := productionEnv(t)
+	env["V1_REQUEST_TIMEOUT"] = "0s"
+	apply(t, env)
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() with V1_REQUEST_TIMEOUT=0s = nil error, want a refusal")
 	}
 }
 

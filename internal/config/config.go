@@ -70,10 +70,13 @@ type Config struct {
 	// verification token is only a proof of address.
 	VerificationTTL time.Duration
 	ResetTTL        time.Duration
-	CookieDomain    string
-	TrustedProxies  []netip.Prefix
-	MailFrom        string
-	PublicBaseURL   string
+	// V1RequestTimeout is the deadline on one /v1 request, streaming included.
+	// It bounds what an abandoned or stuck generation can cost.
+	V1RequestTimeout time.Duration
+	CookieDomain     string
+	TrustedProxies   []netip.Prefix
+	MailFrom         string
+	PublicBaseURL    string
 	// SMTPURL is the relay verification and reset mail goes through, as
 	// smtp://user:pass@host:587 or smtps://user:pass@host:465. Empty is
 	// allowed only outside production, where mail goes to the log instead.
@@ -231,6 +234,11 @@ func Load() (*Config, error) {
 		fail("%v", err)
 	} else {
 		cfg.ResetTTL = d
+	}
+	if d, err := durationOr("V1_REQUEST_TIMEOUT", 5*time.Minute); err != nil {
+		fail("%v", err)
+	} else {
+		cfg.V1RequestTimeout = d
 	}
 
 	// Mail is load-bearing, not decorative: an account cannot be used until its
