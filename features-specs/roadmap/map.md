@@ -37,7 +37,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [08](issues/08-gemini-adapter.md) | Gemini, through the OpenAI-compatible adapter | `resolved` | 07 |
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `resolved` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
-| [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `ready-for-agent` | 07, 10 |
+| [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `ready-for-agent` | 11 |
 | [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
@@ -47,6 +47,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [18](issues/18-load-test.md) | Load test against the mock: under 10ms p50 added latency | `ready-for-agent` | - |
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
+| [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -162,6 +163,28 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   behind a shared NAT can cost its neighbours a couple of seconds at a time.
   `take.lua` touches several keys at once, fine on one Redis node and on
   Upstash, but a Redis Cluster would need hash tags in the key format.
+
+- Ticket 11 (router): the attempt loop is `router.Run`, handed an `Attempt`
+  that opens a stream and reads its first chunk, so the router owns failover
+  and the gateway owns adapters. Skip rules follow the spec's table in
+  `rules.go`. `ErrQuota` covers both no-credit and a daily quota, so it skips
+  the credential and model (the narrower subject) until the upstream's hint,
+  else for an hour. A rate limit skips the credential for 90s, doubling on
+  repeats to 15m; an upstream hint above that is honoured, capped at 24h. 5xx
+  and timeouts count toward a per-vendor breaker (5 in 60s opens it for 30s,
+  across workspaces) and a per-credential-and-model bench (3 in 15m, 10m).
+  A success clears the vendor's count, so ordinary error rates or one
+  workspace's slow model cannot open the breaker for everyone. Context too
+  long skips later targets with the same model in that request only; an
+  invalid request still fails over, since adapters accept different things.
+  Exhaustion is rate limited if any target was refused or skipped for a limit,
+  with Retry-After until the earliest such skip ends rather than the
+  upstream's hint, which the skip already outlasts; otherwise the failure
+  every attempt shared, otherwise 502. Skip state is fixed-window counters and
+  TTL'd keys in Redis, read in one MGET with a 1s in-process copy, written
+  behind the request; Redis errors fall back to in-process state. Keys escape
+  `%` and `:` so a model such as `meta/llama:free` cannot collide. The
+  per-route first-byte timeout from ticket 08's comment became ticket 21.
 
 ## Fog
 

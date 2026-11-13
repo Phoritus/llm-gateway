@@ -1,6 +1,6 @@
 # 11 internal/router: fallback, skip rules, circuit breaker
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 07, 10
 
 Build-order step 5, second half.

@@ -30,6 +30,7 @@ import (
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
@@ -206,8 +207,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		Keys:      deps.GatewayKeys,
 		Routes:    deps.Credentials,
 		Providers: deps.Providers,
-		Timeout:   time.Minute,
-		Limiter:   ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
+		// In memory, so one test's failing targets are not skipped in the next.
+		Router:  router.New(router.NewMemory(), deps.Logger),
+		Timeout: time.Minute,
+		Limiter: ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
 		Limits: gateway.Limits{
 			KeyRequests:          ratelimit.PerMinute(120),
 			KeyTokens:            ratelimit.PerMinute(200_000),

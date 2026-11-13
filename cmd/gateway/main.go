@@ -26,6 +26,7 @@ import (
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/provider/openai"
 	"llm-gateway/internal/ratelimit"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
@@ -188,10 +189,12 @@ func run(logger *slog.Logger) error {
 	}
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
 
+	fallback := router.New(router.NewRedis(rdb), logger)
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      gatewayKeys,
 		Routes:    deps.Credentials,
 		Providers: providers,
+		Router:    fallback,
 		Timeout:   cfg.V1RequestTimeout,
 		Limiter:   ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger),
 		Limits: gateway.Limits{
@@ -264,6 +267,9 @@ func run(logger *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown timed out", slog.String("error", err.Error()))
 	}
+	// The last failures' skips are still being written, and the deferred
+	// Redis close would cut them off.
+	fallback.Wait()
 	logger.Info("stopped")
 	return nil
 }

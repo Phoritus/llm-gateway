@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
@@ -23,6 +24,8 @@ type Deps struct {
 	Keys      KeyAuthenticator
 	Routes    RouteResolver
 	Providers map[provider.Vendor]provider.Provider
+	// Router tries the route's targets in turn. Required.
+	Router *router.Router
 	// Timeout is the deadline on one request, streaming included.
 	Timeout time.Duration
 	// Limiter and Limits bound what a key and a workspace may spend. Both are
@@ -59,8 +62,8 @@ func (d Deps) logger() *slog.Logger {
 
 // Routes builds the /v1 handler. It expects the /v1 prefix stripped.
 func Routes(d Deps) http.Handler {
-	if d.Limiter == nil || d.ClientKey == nil {
-		panic("gateway: Routes needs a Limiter and a ClientKey")
+	if d.Limiter == nil || d.ClientKey == nil || d.Router == nil {
+		panic("gateway: Routes needs a Limiter, a ClientKey and a Router")
 	}
 	d.inflight = &inflight{count: map[string]int{}}
 	d.blocks = &authBlocks{until: map[string]time.Time{}}
