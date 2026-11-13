@@ -1,6 +1,6 @@
 # 13 Free-first routing and exact cache
 
-Status: ready-for-agent
+Status: claimed
 Blocked by: 12
 
 Build-order step 7: `free_quota_catalog`, per-credential buckets, free-first

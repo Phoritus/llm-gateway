@@ -39,7 +39,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `resolved` | 11 |
-| [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
+| [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `claimed` | 12 |
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
 | [16](issues/16-smtp-end-to-end.md) | Check real mail delivery before a production deploy | `ready-for-human` | - |
