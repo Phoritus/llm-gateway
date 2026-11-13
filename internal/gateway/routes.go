@@ -26,6 +26,9 @@ type Deps struct {
 	Providers map[provider.Vendor]provider.Provider
 	// Router tries the route's targets in turn. Required.
 	Router *router.Router
+	// Usage takes one event per request that resolved a route. Required, and
+	// it must not wait: the response is not held up by usage history.
+	Usage UsageRecorder
 	// Timeout is the deadline on one request, streaming included.
 	Timeout time.Duration
 	// Limiter and Limits bound what a key and a workspace may spend. Both are
@@ -62,8 +65,8 @@ func (d Deps) logger() *slog.Logger {
 
 // Routes builds the /v1 handler. It expects the /v1 prefix stripped.
 func Routes(d Deps) http.Handler {
-	if d.Limiter == nil || d.ClientKey == nil || d.Router == nil {
-		panic("gateway: Routes needs a Limiter, a ClientKey and a Router")
+	if d.Limiter == nil || d.ClientKey == nil || d.Router == nil || d.Usage == nil {
+		panic("gateway: Routes needs a Limiter, a ClientKey, a Router and a Usage recorder")
 	}
 	d.inflight = &inflight{count: map[string]int{}}
 	d.blocks = &authBlocks{until: map[string]time.Time{}}

@@ -36,6 +36,7 @@ func apply(t *testing.T, env map[string]string) {
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
+		"USAGE_QUEUE_SIZE", "USAGE_RETENTION", "SHUTDOWN_TIMEOUT",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -299,6 +300,56 @@ func TestLoadOwnsTheV1RequestTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadOwnsTheShutdownBudget(t *testing.T) {
+	apply(t, productionEnv(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	// Under the 30s a platform waits by default between SIGTERM and SIGKILL.
+	if cfg.ShutdownTimeout != 25*time.Second {
+		t.Errorf("ShutdownTimeout = %s, want 25s", cfg.ShutdownTimeout)
+	}
+
+	env := productionEnv(t)
+	env["SHUTDOWN_TIMEOUT"] = "290s"
+	apply(t, env)
+	if cfg, err := Load(); err != nil {
+		t.Errorf("Load() with SHUTDOWN_TIMEOUT=290s = %v", err)
+	} else if cfg.ShutdownTimeout != 290*time.Second {
+		t.Errorf("SHUTDOWN_TIMEOUT=290s loaded as %s", cfg.ShutdownTimeout)
+	}
+
+	for _, bad := range []string{"4s", "0s", "soon"} {
+		env := productionEnv(t)
+		env["SHUTDOWN_TIMEOUT"] = bad
+		apply(t, env)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() with SHUTDOWN_TIMEOUT=%s = nil error, want a refusal", bad)
+		}
+	}
+}
+
+func TestLoadOwnsTheUsageSettings(t *testing.T) {
+	apply(t, productionEnv(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if cfg.UsageQueueSize != 10_000 || cfg.UsageRetention != 30*24*time.Hour {
+		t.Errorf("defaults = %d, %s; want 10000, 720h", cfg.UsageQueueSize, cfg.UsageRetention)
+	}
+
+	env := productionEnv(t)
+	env["USAGE_RETENTION"] = "1h"
+	apply(t, env)
+	if cfg, err := Load(); err != nil {
+		t.Errorf("Load() with USAGE_RETENTION=1h = %v, want it accepted: there is no floor", err)
+	} else if cfg.UsageRetention != time.Hour {
+		t.Errorf("USAGE_RETENTION=1h loaded as %s", cfg.UsageRetention)
+	}
+}
+
 func TestLoadOwnsTheV1Limits(t *testing.T) {
 	apply(t, productionEnv(t))
 	cfg, err := Load()
@@ -321,6 +372,7 @@ func TestLoadOwnsTheV1Limits(t *testing.T) {
 	// every one too, so neither is accepted as a way to say "unlimited".
 	for _, key := range []string{
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
+		"USAGE_QUEUE_SIZE", "USAGE_RETENTION",
 	} {
 		for _, bad := range []string{"0", "-1", "many", "1.5"} {
 			env := productionEnv(t)

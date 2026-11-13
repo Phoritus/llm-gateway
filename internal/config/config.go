@@ -53,6 +53,10 @@ func normalizeOrigin(raw string) string {
 	return strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
 }
 
+// minShutdownTimeout leaves requests a second to finish once the time kept
+// back for the flushes that follow them is taken out.
+const minShutdownTimeout = 5 * time.Second
+
 // Config is the fully validated configuration. Every field is resolved at
 // startup; nothing reads os.Getenv after Load returns.
 type Config struct {
@@ -83,10 +87,16 @@ type Config struct {
 	// V1WorkspaceConcurrency caps a workspace's requests in flight on one
 	// instance. Long streams are what exhaust memory first.
 	V1WorkspaceConcurrency int
-	CookieDomain           string
-	TrustedProxies         []netip.Prefix
-	MailFrom               string
-	PublicBaseURL          string
+	// UsageQueueSize is how many usage events wait to be written. A full queue
+	// drops its oldest, so this bounds memory while the database is slow.
+	UsageQueueSize int
+	// UsageRetention is how long raw usage events are kept. The daily rollup
+	// is kept for good.
+	UsageRetention time.Duration
+	CookieDomain   string
+	TrustedProxies []netip.Prefix
+	MailFrom       string
+	PublicBaseURL  string
 	// SMTPURL is the relay verification and reset mail goes through, as
 	// smtp://user:pass@host:587 or smtps://user:pass@host:465. Empty is
 	// allowed only outside production, where mail goes to the log instead.
@@ -95,9 +105,12 @@ type Config struct {
 	// credentials in OTEL_EXPORTER_OTLP_HEADERS are deliberately not read
 	// here: the SDK reads them itself, so they never pass through anything
 	// that could log them.
-	OTLPEndpoint    string
-	SemanticCache   bool
-	ContextHandoff  bool
+	OTLPEndpoint   string
+	SemanticCache  bool
+	ContextHandoff bool
+	// ShutdownTimeout is the whole of a graceful shutdown, from the signal to
+	// exit: draining requests, then flushing usage and telemetry. The platform
+	// kills the process on a timer of its own, so this has to end first.
 	ShutdownTimeout time.Duration
 }
 
@@ -120,13 +133,12 @@ func Load() (*Config, error) {
 	publicBaseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
 
 	cfg := &Config{
-		Env:             Environment(strings.ToLower(envOr("APP_ENV", string(EnvDevelopment)))),
-		CookieDomain:    os.Getenv("COOKIE_DOMAIN"),
-		MailFrom:        envOr("MAIL_FROM", "no-reply@localhost"),
-		PublicBaseURL:   strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
-		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
-		OTLPEndpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-		ShutdownTimeout: 20 * time.Second,
+		Env:           Environment(strings.ToLower(envOr("APP_ENV", string(EnvDevelopment)))),
+		CookieDomain:  os.Getenv("COOKIE_DOMAIN"),
+		MailFrom:      envOr("MAIL_FROM", "no-reply@localhost"),
+		PublicBaseURL: strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
+		SMTPURL:       strings.TrimSpace(os.Getenv("SMTP_URL")),
+		OTLPEndpoint:  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
 
 	if cfg.Env != EnvDevelopment && cfg.Env != EnvProduction {
@@ -250,6 +262,13 @@ func Load() (*Config, error) {
 	} else {
 		cfg.V1RequestTimeout = d
 	}
+	if d, err := durationOr("SHUTDOWN_TIMEOUT", 25*time.Second); err != nil {
+		fail("%v", err)
+	} else if d < minShutdownTimeout {
+		fail("SHUTDOWN_TIMEOUT must be at least %s, got %s", minShutdownTimeout, d)
+	} else {
+		cfg.ShutdownTimeout = d
+	}
 	for _, limit := range []struct {
 		key      string
 		fallback int
@@ -266,6 +285,17 @@ func Load() (*Config, error) {
 		} else {
 			*limit.field = n
 		}
+	}
+
+	if n, err := positiveIntOr("USAGE_QUEUE_SIZE", 10_000); err != nil {
+		fail("%v", err)
+	} else {
+		cfg.UsageQueueSize = n
+	}
+	if d, err := durationOr("USAGE_RETENTION", 30*24*time.Hour); err != nil {
+		fail("%v", err)
+	} else {
+		cfg.UsageRetention = d
 	}
 
 	// Mail is load-bearing, not decorative: an account cannot be used until its

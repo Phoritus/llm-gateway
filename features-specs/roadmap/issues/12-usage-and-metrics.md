@@ -1,6 +1,6 @@
 # 12 Usage events, rollups and metrics (Gate A: free launch)
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 11
 
 Build-order step 6.

@@ -3,10 +3,15 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
@@ -507,5 +512,107 @@ func TestExhaustionWhenEveryTargetIsSkipped(t *testing.T) {
 		_, called, err := h.run(3, nil, badKey)
 		wantCalled(t, called)
 		wantExhausted(t, err, provider.ErrUpstream, 0)
+	})
+}
+
+// metricReader installs a meter provider once: the package's counters bind to
+// the first global provider only, so every test that reads one shares it.
+var metricReader = sync.OnceValue(func() *sdkmetric.ManualReader {
+	reader := sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	return reader
+})
+
+// counted reads a counter's running total across all its label sets. It is
+// cumulative across tests, so tests compare it before and after.
+func counted(t *testing.T, name string) (total int64) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := metricReader().Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				total += dp.Value
+			}
+		}
+	}
+	return total
+}
+
+func TestAClientHangUpIsNotCountedAsAnUpstreamError(t *testing.T) {
+	before := counted(t, "router.upstream.errors")
+	h := newHarness(t)
+	route := &store.ResolvedRoute{ID: "r", MaxHops: 3, Targets: []store.ResolvedTarget{target("c1", provider.VendorGroq, "m")}}
+	waitOut := func(ctx context.Context, _ store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+
+	ctx, hangUp := context.WithCancel(context.Background())
+	hangUp()
+	if _, err := h.r.Run(ctx, route, waitOut); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want the cancellation", err)
+	}
+	if got := counted(t, "router.upstream.errors") - before; got != 0 {
+		t.Errorf("a client hanging up counted %d upstream errors against the vendor, want 0", got)
+	}
+
+	// The request's own deadline running out on a target still is one.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if _, err := h.r.Run(ctx, route, waitOut); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want the deadline", err)
+	}
+	if got := counted(t, "router.upstream.errors") - before; got != 1 {
+		t.Errorf("a request that timed out on its target counted %d upstream errors, want 1", got)
+	}
+}
+
+func TestBreakerOpenedCountsAnOpeningOnce(t *testing.T) {
+	alwaysFail := func(context.Context, store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+		return nil, nil, failure(provider.ErrUpstream, 0)
+	}
+
+	t.Run("one request walking ten failing targets", func(t *testing.T) {
+		before := counted(t, "router.breaker.opened")
+		h := newHarness(t)
+		var targets []store.ResolvedTarget
+		for i := range 10 {
+			targets = append(targets, target(fmt.Sprintf("c%d", i), provider.VendorGroq, "m"))
+		}
+		_, _ = h.r.Run(context.Background(), &store.ResolvedRoute{ID: "r", MaxHops: 10, Targets: targets}, alwaysFail)
+		h.r.Wait()
+		if got := counted(t, "router.breaker.opened") - before; got != 1 {
+			t.Errorf("ten failures in a row counted %d openings, want 1", got)
+		}
+	})
+
+	t.Run("ten requests failing at once", func(t *testing.T) {
+		before := counted(t, "router.breaker.opened")
+		h := newHarness(t)
+		var arrived, done sync.WaitGroup
+		arrived.Add(10)
+		for i := range 10 {
+			done.Go(func() {
+				route := &store.ResolvedRoute{ID: "r", MaxHops: 3,
+					Targets: []store.ResolvedTarget{target(fmt.Sprintf("c%d", i), provider.VendorGroq, "m")}}
+				_, _ = h.r.Run(context.Background(), route,
+					func(context.Context, store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+						arrived.Done()
+						arrived.Wait()
+						return nil, nil, failure(provider.ErrUpstream, 0)
+					})
+			})
+		}
+		done.Wait()
+		h.r.Wait()
+		if got := counted(t, "router.breaker.opened") - before; got != 1 {
+			t.Errorf("ten concurrent failures counted %d openings, want 1", got)
+		}
 	})
 }

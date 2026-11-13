@@ -123,7 +123,7 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 	}
 
 	if !validAlias(req.Alias) {
-		invalidField(w, "alias", "alias must be 1 to 64 characters of letters, digits, '.', '_', '-', ':' or '/', starting with a letter or digit.")
+		invalidField(w, "alias", "alias must be "+aliasRule+".")
 		return store.RouteSpec{}, false
 	}
 	hops := defaultMaxHops
@@ -161,6 +161,9 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 	}
 	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, MaxHops: hops, Targets: targets}, true
 }
+
+// aliasRule is validAlias in words, for the error that refuses one.
+const aliasRule = "1 to 64 characters of letters, digits, '.', '_', '-', ':' or '/', starting with a letter or digit"
 
 func validAlias(s string) bool {
 	if s == "" || len(s) > maxAliasLen || !isAlnum(s[0]) {

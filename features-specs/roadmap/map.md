@@ -38,7 +38,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `resolved` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
-| [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `ready-for-agent` | 11 |
+| [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `resolved` | 11 |
 | [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
@@ -185,6 +185,38 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   behind the request; Redis errors fall back to in-process state. Keys escape
   `%` and `:` so a model such as `meta/llama:free` cannot collide. The
   per-route first-byte timeout from ticket 08's comment became ticket 21.
+
+- Ticket 12 (usage and metrics): the write and read sides of usage are
+  separate inside `usage` only, not an app-wide CQRS. One event per request
+  that resolved a route; requests refused before it (auth, validation, rate
+  limit, concurrency, unknown model) get metrics only, so a flood cannot
+  flood the table. Events carry the route alias, vendor and model as text, so
+  history survives a deleted route or credential. Each event
+  carries a UUID minted when it is recorded, and a batch is one statement: it
+  inserts the raw rows, skipping an id already stored, and adds only the rows
+  it inserted to `usage_daily` (workspace, UTC day, alias, vendor, model). A
+  failed batch therefore counts nothing and a batch retried after a lost
+  acknowledgement counts once. A batch that fails twice is written one event
+  at a time, so an event the database refuses (a deleted workspace) costs only
+  itself; token and latency columns are `bigint` so an upstream's count cannot
+  be that event. Lost events are counted in `usage.events.dropped` by reason:
+  `overflow` (full queue), `write_failed`, or `shutdown` (recorded after
+  `Close`, or abandoned at its deadline). `errors` in the rollup is every
+  outcome except `ok` and `client_gone`; a stream that fails after its first
+  chunk is status 200 with outcome `stream_error`. Metric labels are vendor
+  and outcome only, never alias, workspace or key; breaker state is
+  `router.breaker.opened`, since a live gauge cannot be read reliably from
+  per-instance copies. It counts crossings: the one failure whose count equals
+  the threshold, not the failures after it that extend the breaker. A client
+  hanging up mid-call is not counted in `router.upstream.errors`; the
+  request's deadline running out is. Shutdown is one budget, `SHUTDOWN_TIMEOUT`
+  (default 25s, at least 5s), from SIGTERM to exit: requests drain for all but
+  the last 4s and are then cut, the usage flush runs to 1s before the end and
+  the telemetry flush to the end. It must stay under the platform's kill
+  delay. Render's is 30s by default and `maxShutdownDelaySeconds` raises it to
+  at most 300s, so streams as long as `V1_REQUEST_TIMEOUT` survive a deploy
+  only if both are raised together (300 and `SHUTDOWN_TIMEOUT=290s`); with the
+  defaults a deploy cuts them.
 
 ## Fog
 
