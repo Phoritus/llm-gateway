@@ -10,12 +10,13 @@ import (
 	"llm-gateway/internal/store"
 )
 
-// Outcome is how one target fared. It is a header value and a log field, so
-// it comes from this fixed set and never from the upstream.
-type Outcome string
+// Outcome is how one target fared. It is the type usage history stores, so a
+// request that ends on a target's failure is recorded under that failure's
+// name.
+type Outcome = store.Outcome
 
 const (
-	OutcomeOK               Outcome = "ok"
+	OutcomeOK                       = store.OutcomeOK
 	OutcomeSkipped          Outcome = "skipped"
 	OutcomeRateLimited      Outcome = "rate_limited"
 	OutcomeQuota            Outcome = "quota"

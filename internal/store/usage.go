@@ -10,12 +10,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// The outcomes the store itself has to tell apart. The rest of the fixed set
-// (the reduced exhaustion kinds) is only ever stored and shown.
+// Outcome is how a request, or one attempt at a target, ended. It is a stored
+// column, a header value and a metric label, so it is one of the constants
+// declared here, in router and in gateway, and never text from an upstream.
+type Outcome string
+
 const (
-	OutcomeOK          = "ok"
-	OutcomeStreamError = "stream_error"
-	OutcomeClientGone  = "client_gone"
+	OutcomeOK          Outcome = "ok"
+	OutcomeStreamError Outcome = "stream_error"
+	OutcomeClientGone  Outcome = "client_gone"
 )
 
 // UsageEvent is one request that resolved a route.
@@ -29,7 +32,7 @@ type UsageEvent struct {
 	// Status is what the client was told. A stream that failed after its first
 	// chunk is still 200: Outcome says it failed.
 	Status           int
-	Outcome          string
+	Outcome          Outcome
 	Attempts         int
 	PromptTokens     int
 	CompletionTokens int

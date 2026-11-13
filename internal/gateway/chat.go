@@ -203,7 +203,7 @@ func headerSafe(s string) string {
 //
 // It returns how the stream ended. The status was sent with the first chunk,
 // so a stream that fails afterwards is still a 200 and only the outcome says so.
-func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk, cost *spent, wantsUsage bool) string {
+func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk, cost *spent, wantsUsage bool) store.Outcome {
 	ctx := r.Context()
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -262,7 +262,7 @@ func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream prov
 // failBeforeFirstByte answers an upstream failure while a status line can
 // still be sent. A client that has gone away gets nothing: there is no one to
 // read it. It returns the status and outcome for the usage record.
-func (d Deps) failBeforeFirstByte(w http.ResponseWriter, r *http.Request, err error) (int, string) {
+func (d Deps) failBeforeFirstByte(w http.ResponseWriter, r *http.Request, err error) (int, store.Outcome) {
 	if clientGone(r.Context()) {
 		return statusClientClosed, store.OutcomeClientGone
 	}

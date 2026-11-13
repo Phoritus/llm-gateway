@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/store"
 )
 
 const (
@@ -27,17 +28,17 @@ type usageDayView struct {
 }
 
 type usageEventView struct {
-	CreatedAt        time.Time `json:"created_at"`
-	Route            string    `json:"route"`
-	Vendor           string    `json:"vendor"`
-	Model            string    `json:"model"`
-	Status           int       `json:"status"`
-	Outcome          string    `json:"outcome"`
-	Attempts         int       `json:"attempts"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	LatencyMs        int       `json:"latency_ms"`
-	TTFTMs           int       `json:"ttft_ms"`
+	CreatedAt        time.Time     `json:"created_at"`
+	Route            string        `json:"route"`
+	Vendor           string        `json:"vendor"`
+	Model            string        `json:"model"`
+	Status           int           `json:"status"`
+	Outcome          store.Outcome `json:"outcome"`
+	Attempts         int           `json:"attempts"`
+	PromptTokens     int           `json:"prompt_tokens"`
+	CompletionTokens int           `json:"completion_tokens"`
+	LatencyMs        int           `json:"latency_ms"`
+	TTFTMs           int           `json:"ttft_ms"`
 }
 
 // handleUsage is GET /api/usage: the daily rollup for a range of UTC days, and

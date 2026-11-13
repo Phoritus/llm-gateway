@@ -10,6 +10,7 @@ import (
 
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
+	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
 )
 
@@ -57,9 +58,8 @@ func invalidField(w http.ResponseWriter, param, message string) {
 // line before the first byte, or as a final SSE event after it. Upstream
 // trouble is never a 500 -- the gateway did its job, the upstream did not.
 //
-// The third value is the failure's name in usage history and metrics, one of
-// the router's outcomes.
-func upstreamError(err error) (int, errorDetail, router.Outcome) {
+// The third value is the failure's name in usage history and metrics.
+func upstreamError(err error) (int, errorDetail, store.Outcome) {
 	switch {
 	case errors.Is(err, provider.ErrRateLimited), errors.Is(err, provider.ErrQuota):
 		return http.StatusTooManyRequests, errorDetail{Type: typeRateLimit, Code: "upstream_rate_limited",
@@ -87,14 +87,14 @@ func upstreamError(err error) (int, errorDetail, router.Outcome) {
 
 // writeUpstreamError answers a failure that happened before the first byte,
 // and returns the status and outcome it told the client.
-func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) (int, string) {
+func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) (int, store.Outcome) {
 	d.logUpstream(r, err)
 	status, detail, outcome := upstreamError(err)
 	if status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(provider.RetryAfter(err))))
 	}
 	writeJSON(w, status, errorBody{Error: detail})
-	return status, string(outcome)
+	return status, outcome
 }
 
 func (d Deps) serverError(w http.ResponseWriter, r *http.Request, err error, op string) {

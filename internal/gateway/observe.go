@@ -18,12 +18,12 @@ import (
 const statusClientClosed = 499
 
 // The labels below come from fixed sets only: a vendor is one of
-// provider.Vendor, an outcome is one of the constants in store and router.
-// Never the route alias, the workspace or the key: each of those is a new
-// metric series per tenant.
+// provider.Vendor, an outcome is a store.Outcome constant. Never the route
+// alias, the workspace or the key: each of those is a new metric series per
+// tenant.
 const (
-	noVendor       = "none"
-	outcomeRefused = "refused"
+	noVendor                     = "none"
+	outcomeRefused store.Outcome = "refused"
 )
 
 var (
@@ -62,7 +62,7 @@ type observation struct {
 	// status is what the client was told, and outcome the fixed name of how
 	// the request ended.
 	status  int
-	outcome string
+	outcome store.Outcome
 }
 
 // finish records the request. It runs last, after the response is written,
@@ -77,7 +77,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 	}
 	elapsed := time.Since(o.start)
 	ctx := context.Background()
-	both := metric.WithAttributes(attribute.String("vendor", vendor), attribute.String("outcome", outcome))
+	both := metric.WithAttributes(attribute.String("vendor", vendor), attribute.String("outcome", string(outcome)))
 
 	requestsTotal.Add(ctx, 1, both)
 	requestDuration.Record(ctx, elapsed.Seconds(), both)
