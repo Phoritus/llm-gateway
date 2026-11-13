@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -34,7 +35,7 @@ var (
 	// A count of openings stands in for the breaker's state: a gauge of it
 	// would have to be read from each instance's own copy of the shared state.
 	breakerOpened, _ = otel.Meter("llm-gateway/router").Int64Counter("router.breaker.opened",
-		metric.WithDescription("Times a vendor's circuit breaker was placed."))
+		metric.WithDescription("Times a vendor's circuit breaker opened."))
 )
 
 // Attempt opens a stream to one target and reads its first chunk. A stream
@@ -153,7 +154,10 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		// shows the target the request's time ran out on.
 		if ctx.Err() != nil {
 			step.Outcome, step.Err = OutcomeTimeout, err
-			countFailure(ctx, t, step.Outcome)
+			// A client that hung up is not the vendor failing to answer.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				countFailure(ctx, t, step.Outcome)
+			}
 			res.Steps = append(res.Steps, step)
 			return res, err
 		}
@@ -269,7 +273,10 @@ func (r *Router) failed(ctx context.Context, t store.ResolvedTarget, rl rule, hi
 			ttl := e.ttl(hint, repeat)
 			s := skip{outcome: rl.outcome, until: now.Add(ttl)}
 			placed[e.subject.key(t)] = s
-			if e.subject.prefix == vendor.prefix {
+			// Only the failure that reached the threshold opens the breaker;
+			// the ones after it extend it. The store hands each count to one
+			// caller, so concurrent failures and other instances agree on which.
+			if e.subject.prefix == vendor.prefix && repeat == 1 {
 				breakerOpened.Add(ctx, 1, metric.WithAttributes(attribute.String("vendor", string(t.Vendor))))
 			}
 			entries = append(entries, Entry{Key: e.subject.key(t), Value: s.encode(), TTL: ttl})
