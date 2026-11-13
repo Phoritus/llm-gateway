@@ -53,6 +53,10 @@ func normalizeOrigin(raw string) string {
 	return strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
 }
 
+// minShutdownTimeout leaves requests a second to finish once the time kept
+// back for the flushes that follow them is taken out.
+const minShutdownTimeout = 5 * time.Second
+
 // minUsageRetention keeps the recent-requests list the dashboard shows from
 // being pruned out from under it.
 const minUsageRetention = 24 * time.Hour
@@ -105,9 +109,12 @@ type Config struct {
 	// credentials in OTEL_EXPORTER_OTLP_HEADERS are deliberately not read
 	// here: the SDK reads them itself, so they never pass through anything
 	// that could log them.
-	OTLPEndpoint    string
-	SemanticCache   bool
-	ContextHandoff  bool
+	OTLPEndpoint   string
+	SemanticCache  bool
+	ContextHandoff bool
+	// ShutdownTimeout is the whole of a graceful shutdown, from the signal to
+	// exit: draining requests, then flushing usage and telemetry. The platform
+	// kills the process on a timer of its own, so this has to end first.
 	ShutdownTimeout time.Duration
 }
 
@@ -130,13 +137,12 @@ func Load() (*Config, error) {
 	publicBaseURL := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
 
 	cfg := &Config{
-		Env:             Environment(strings.ToLower(envOr("APP_ENV", string(EnvDevelopment)))),
-		CookieDomain:    os.Getenv("COOKIE_DOMAIN"),
-		MailFrom:        envOr("MAIL_FROM", "no-reply@localhost"),
-		PublicBaseURL:   strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
-		SMTPURL:         strings.TrimSpace(os.Getenv("SMTP_URL")),
-		OTLPEndpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-		ShutdownTimeout: 20 * time.Second,
+		Env:           Environment(strings.ToLower(envOr("APP_ENV", string(EnvDevelopment)))),
+		CookieDomain:  os.Getenv("COOKIE_DOMAIN"),
+		MailFrom:      envOr("MAIL_FROM", "no-reply@localhost"),
+		PublicBaseURL: strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
+		SMTPURL:       strings.TrimSpace(os.Getenv("SMTP_URL")),
+		OTLPEndpoint:  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
 
 	if cfg.Env != EnvDevelopment && cfg.Env != EnvProduction {
@@ -259,6 +265,13 @@ func Load() (*Config, error) {
 		fail("%v", err)
 	} else {
 		cfg.V1RequestTimeout = d
+	}
+	if d, err := durationOr("SHUTDOWN_TIMEOUT", 25*time.Second); err != nil {
+		fail("%v", err)
+	} else if d < minShutdownTimeout {
+		fail("SHUTDOWN_TIMEOUT must be at least %s, got %s", minShutdownTimeout, d)
+	} else {
+		cfg.ShutdownTimeout = d
 	}
 	for _, limit := range []struct {
 		key      string

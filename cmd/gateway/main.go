@@ -33,9 +33,16 @@ import (
 )
 
 const (
-	// usageFlushTimeout is what shutdown spends writing the usage events still
-	// queued, counted from when the last request has finished.
-	usageFlushTimeout = 10 * time.Second
+	// shutdownReserve is the end of SHUTDOWN_TIMEOUT kept back from draining
+	// requests, for what has to run after them: the router's last writes, the
+	// usage flush and the telemetry flush.
+	shutdownReserve = 4 * time.Second
+	// telemetryReserve is the end of shutdownReserve the usage flush leaves
+	// for the telemetry flush.
+	telemetryReserve = time.Second
+	// telemetryFlushTimeout bounds the telemetry flush on a return that never
+	// started a shutdown, such as a failed startup.
+	telemetryFlushTimeout = 5 * time.Second
 	// retentionInterval is how often old raw usage events are pruned. Nothing
 	// depends on the exact cadence, so it is not configuration.
 	retentionInterval = time.Hour
@@ -48,6 +55,27 @@ func main() {
 	if err := run(logger); err != nil {
 		logger.Error("startup failed", slog.String("error", err.Error()))
 		os.Exit(1)
+	}
+}
+
+// shutdownPlan is when each step of a graceful shutdown gives up. The steps
+// share one budget because the platform's kill timer does not wait for them
+// one by one.
+type shutdownPlan struct {
+	// drainBy is when requests still in flight are cut.
+	drainBy time.Time
+	// flushBy is when the usage flush stops, leaving the rest to telemetry.
+	flushBy time.Time
+	// stopBy is the end of the budget.
+	stopBy time.Time
+}
+
+func planShutdown(signalled time.Time, budget time.Duration) shutdownPlan {
+	stopBy := signalled.Add(budget)
+	return shutdownPlan{
+		drainBy: stopBy.Add(-shutdownReserve),
+		flushBy: stopBy.Add(-telemetryReserve),
+		stopBy:  stopBy,
 	}
 }
 
@@ -83,8 +111,13 @@ func run(logger *slog.Logger) error {
 	// Deferred first so it runs last: after the server has drained, the last
 	// requests' spans and metrics are in what gets flushed, and an early
 	// return still flushes whatever was recorded before it.
+	var plan shutdownPlan
 	defer func() {
-		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		deadline := plan.stopBy
+		if deadline.IsZero() {
+			deadline = time.Now().Add(telemetryFlushTimeout)
+		}
+		flushCtx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
 		if err := shutdownTelemetry(flushCtx); err != nil {
 			logger.Error("telemetry shutdown failed", slog.String("error", err.Error()))
@@ -275,25 +308,30 @@ func run(logger *slog.Logger) error {
 		logger.Info("shutdown signal received")
 	}
 
-	// Stop accepting, let in-flight requests finish, then let the deferred
-	// closes run.
-	//
-	// A stream still running when the window ends is cut, and V1_REQUEST_TIMEOUT
-	// (5m) is far longer than this. A longer window would not save it: Render
-	// sends SIGKILL about 30s after SIGTERM, so any timeout past that is never
-	// reached. The client sees the connection drop and retries.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	defer cancel()
+	// SHUTDOWN_TIMEOUT covers everything from here to exit, because the
+	// platform's kill does: Render sends SIGKILL 30s after SIGTERM unless
+	// maxShutdownDelaySeconds raises it, to 300s at most. A step that ran past
+	// the budget would be killed part-way, so each one gets a deadline inside it.
+	plan = planShutdown(time.Now(), cfg.ShutdownTimeout)
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown timed out", slog.String("error", err.Error()))
+	// A request still running at drainBy is cut. With the defaults that is any
+	// stream older than about 20s, far short of V1_REQUEST_TIMEOUT: streams
+	// outlive a deploy only when the platform's delay and SHUTDOWN_TIMEOUT are
+	// raised together. Closing the connections cancels those requests, which
+	// stops their upstream calls.
+	drainCtx, cancel := context.WithDeadline(context.Background(), plan.drainBy)
+	defer cancel()
+	if err := srv.Shutdown(drainCtx); err != nil {
+		logger.Error("drain window ended with requests in flight; cutting them", slog.String("error", err.Error()))
+		_ = srv.Close()
 	}
 	// The last failures' skips are still being written, and the deferred
 	// Redis close would cut them off.
 	fallback.Wait()
-	// Last among the writers: every handler has finished, so every event that
-	// will ever be recorded is queued. The pool closes after this.
-	flushCtx, cancelFlush := context.WithTimeout(context.Background(), usageFlushTimeout)
+	// Last among the writers, while the pool is still open. A request that was
+	// cut above may record after this; its event is counted as dropped for
+	// shutdown.
+	flushCtx, cancelFlush := context.WithDeadline(context.Background(), plan.flushBy)
 	defer cancelFlush()
 	usageRecorder.Close(flushCtx)
 	logger.Info("stopped")
