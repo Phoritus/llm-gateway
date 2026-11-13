@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -133,6 +134,52 @@ func TestUsageRefusesABadDateRange(t *testing.T) {
 	ok := alice.do(http.MethodGet, "/api/usage?from=2025-01-01&to=2026-01-01", nil) // 366 days
 	if ok.status != http.StatusOK {
 		t.Errorf("366 days: %d %s", ok.status, ok.raw)
+	}
+}
+
+func TestUsageRefusesARouteThatCouldNotBeAnAlias(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+
+	for _, route := range []string{"%00", "%ff", "has%20space", "-leading"} {
+		res := alice.do(http.MethodGet, "/api/usage?route="+route, nil)
+		errObj, _ := res.body["error"].(map[string]any)
+		if res.status != http.StatusBadRequest || res.errorCode() != "invalid_value" || errObj["param"] != "route" {
+			t.Errorf("route=%s: %d %s, want 400 invalid_value on route", route, res.status, res.raw)
+		}
+	}
+}
+
+func TestUsageFromAloneCoversThirtyDaysOrUpToToday(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	ws := env.workspaceOf("alice@example.com")
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	daysOf := func(from time.Time) []string {
+		t.Helper()
+		res := alice.do(http.MethodGet, "/api/usage?from="+from.Format("2006-01-02"), nil)
+		if res.status != http.StatusOK {
+			t.Fatalf("from=%s alone: %d %s", from.Format("2006-01-02"), res.status, res.raw)
+		}
+		var got []string
+		for _, d := range list(res.body["days"]) {
+			got = append(got, d.(map[string]any)["day"].(string))
+		}
+		return got
+	}
+
+	old := today.AddDate(0, 0, -400)
+	for _, offset := range []int{0, 29, 30} {
+		env.writeUsage(ws, "chat", old.AddDate(0, 0, offset), 1)
+	}
+	want := []string{old.Format("2006-01-02"), old.AddDate(0, 0, 29).Format("2006-01-02")}
+	if got := daysOf(old); !slices.Equal(got, want) {
+		t.Errorf("from 400 days back = %v, want its 30 days %v", got, want)
+	}
+
+	env.writeUsage(ws, "chat", today, 1)
+	if got := daysOf(today.AddDate(0, 0, -3)); !slices.Equal(got, []string{today.Format("2006-01-02")}) {
+		t.Errorf("from 3 days back = %v, want the window to end today", got)
 	}
 }
 

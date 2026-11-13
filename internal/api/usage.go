@@ -48,8 +48,13 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	route := r.URL.Query().Get("route")
+	if route != "" && !validAlias(route) {
+		invalidField(w, "route", "route must be a route's alias: "+aliasRule+".")
+		return
+	}
 	workspaceID := auth.WorkspaceID(r.Context())
-	days, err := d.Store.Daily(r.Context(), workspaceID, from, to, r.URL.Query().Get("route"))
+	days, err := d.Store.Daily(r.Context(), workspaceID, from, to, route)
 	if err != nil {
 		d.serverErrorf(w, r, err, "read usage rollup")
 		return
@@ -81,8 +86,10 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"days": dayViews, "recent": eventViews})
 }
 
-// usageRange reads from and to as UTC dates. With neither, it is the last 30
-// days ending today; with one, the other is 30 days away from it.
+// usageRange reads from and to as UTC dates and returns a range of at most
+// 366 days. With neither, it is the 30 days ending today. With to alone, the
+// 30 days ending on it. With from alone, the 30 days starting on it, cut
+// short at today when today falls inside them.
 func usageRange(w http.ResponseWriter, r *http.Request) (from, to time.Time, ok bool) {
 	q := r.URL.Query()
 	today := time.Now().UTC().Truncate(24 * time.Hour)
@@ -111,7 +118,10 @@ func usageRange(w http.ResponseWriter, r *http.Request) (from, to time.Time, ok 
 		to = today
 		from = to.AddDate(0, 0, 1-defaultUsageDays)
 	case !hasTo:
-		to = today
+		to = from.AddDate(0, 0, defaultUsageDays-1)
+		if today.Before(to) && !today.Before(from) {
+			to = today
+		}
 	case !hasFrom:
 		from = to.AddDate(0, 0, 1-defaultUsageDays)
 	}
