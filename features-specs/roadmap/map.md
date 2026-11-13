@@ -38,7 +38,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [09](issues/09-anthropic-adapter.md) | provider/anthropic adapter | `resolved` | 07 |
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
-| [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `ready-for-agent` | 11 |
+| [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `resolved` | 11 |
 | [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
@@ -185,6 +185,25 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   behind the request; Redis errors fall back to in-process state. Keys escape
   `%` and `:` so a model such as `meta/llama:free` cannot collide. The
   per-route first-byte timeout from ticket 08's comment became ticket 21.
+
+- Ticket 12 (usage and metrics): the write and read sides of usage are
+  separate inside `usage` only, not an app-wide CQRS. One event per request
+  that resolved a route; requests refused before it (auth, validation, rate
+  limit, concurrency, unknown model) get metrics only, so a flood cannot
+  flood the table. Events carry the route alias, vendor and model as text, so
+  history survives a deleted route or credential. A batch inserts its raw rows
+  and upserts `usage_daily` (workspace, UTC day, alias, vendor, model) in one
+  transaction, so a failed batch counts nothing and a retry counts once. A
+  write is retried once, then dropped and counted (`usage.events.dropped`,
+  reason `overflow` or `write_failed`). `errors` in the rollup is every
+  outcome except `ok` and `client_gone`; a stream that fails after its first
+  chunk is status 200 with outcome `stream_error`. Metric labels are vendor
+  and outcome only, never alias, workspace or key; breaker state is
+  `router.breaker.opened`, a count of openings, since a live gauge cannot be
+  read reliably from per-instance copies. Shutdown keeps its 20s window: Render
+  kills about 30s after SIGTERM, so no longer window could save a 5-minute
+  stream; long streams are cut on deploy and the usage queue is flushed in up
+  to 10s after the server stops.
 
 ## Fog
 
