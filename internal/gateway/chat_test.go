@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
+	"llm-gateway/internal/usage"
 )
 
 const (
@@ -71,6 +73,24 @@ func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*s
 	return route, nil
 }
 
+// fakeUsage keeps every event it is given.
+type fakeUsage struct {
+	mu     sync.Mutex
+	events []usage.Event
+}
+
+func (u *fakeUsage) Record(e usage.Event) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.events = append(u.events, e)
+}
+
+func (u *fakeUsage) recorded() []usage.Event {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return append([]usage.Event(nil), u.events...)
+}
+
 // roomy is a limit no test reaches unless it sets a tighter one.
 var roomy = ratelimit.PerMinute(1e9)
 
@@ -80,6 +100,7 @@ func deps(p provider.Provider, timeout time.Duration) Deps {
 		Routes:    fakeRoutes{},
 		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: p},
 		Router:    router.New(router.NewMemory(), nil),
+		Usage:     &fakeUsage{},
 		Timeout:   timeout,
 		Limiter:   ratelimit.NewLocal(),
 		Limits: Limits{

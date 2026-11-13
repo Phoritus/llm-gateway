@@ -7,6 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
 )
@@ -21,6 +25,16 @@ const (
 	copyTTL = time.Second
 	// writeTimeout bounds the writes after a failure, which nobody waits on.
 	writeTimeout = 2 * time.Second
+)
+
+// The labels are a vendor and an outcome, both from fixed sets.
+var (
+	upstreamErrors, _ = otel.Meter("llm-gateway/router").Int64Counter("router.upstream.errors",
+		metric.WithDescription("Failed calls to a target, by vendor and outcome."))
+	// A count of openings stands in for the breaker's state: a gauge of it
+	// would have to be read from each instance's own copy of the shared state.
+	breakerOpened, _ = otel.Meter("llm-gateway/router").Int64Counter("router.breaker.opened",
+		metric.WithDescription("Times a vendor's circuit breaker was placed."))
 )
 
 // Attempt opens a stream to one target and reads its first chunk. A stream
@@ -139,6 +153,7 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		// shows the target the request's time ran out on.
 		if ctx.Err() != nil {
 			step.Outcome, step.Err = OutcomeTimeout, err
+			countFailure(ctx, t, step.Outcome)
 			res.Steps = append(res.Steps, step)
 			return res, err
 		}
@@ -153,9 +168,15 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		}
 		seen.failed(rl, placed)
 		step.Outcome, step.Err = rl.outcome, err
+		countFailure(ctx, t, step.Outcome)
 		res.Steps = append(res.Steps, step)
 	}
 	return res, seen.exhausted(r.now())
+}
+
+func countFailure(ctx context.Context, t store.ResolvedTarget, o Outcome) {
+	upstreamErrors.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("vendor", string(t.Vendor)), attribute.String("outcome", string(o))))
 }
 
 // view is the stored state a request routes by: the raw values of its
@@ -248,6 +269,9 @@ func (r *Router) failed(ctx context.Context, t store.ResolvedTarget, rl rule, hi
 			ttl := e.ttl(hint, repeat)
 			s := skip{outcome: rl.outcome, until: now.Add(ttl)}
 			placed[e.subject.key(t)] = s
+			if e.subject.prefix == vendor.prefix {
+				breakerOpened.Add(ctx, 1, metric.WithAttributes(attribute.String("vendor", string(t.Vendor))))
+			}
 			entries = append(entries, Entry{Key: e.subject.key(t), Value: s.encode(), TTL: ttl})
 		}
 		r.state.Set(ctx, entries)

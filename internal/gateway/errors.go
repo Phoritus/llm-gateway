@@ -56,40 +56,45 @@ func invalidField(w http.ResponseWriter, param, message string) {
 // upstreamError is how an upstream failure is told to a client: as a status
 // line before the first byte, or as a final SSE event after it. Upstream
 // trouble is never a 500 -- the gateway did its job, the upstream did not.
-func upstreamError(err error) (int, errorDetail) {
+//
+// The third value is the failure's name in usage history and metrics, one of
+// the router's outcomes.
+func upstreamError(err error) (int, errorDetail, router.Outcome) {
 	switch {
 	case errors.Is(err, provider.ErrRateLimited), errors.Is(err, provider.ErrQuota):
 		return http.StatusTooManyRequests, errorDetail{Type: typeRateLimit, Code: "upstream_rate_limited",
-			Message: "The upstream provider is rate limiting requests. Try again later."}
+			Message: "The upstream provider is rate limiting requests. Try again later."}, router.OutcomeRateLimited
 	case errors.Is(err, provider.ErrContextTooLong):
 		return http.StatusRequestEntityTooLarge, errorDetail{Type: typeInvalidRequest, Code: "context_length_exceeded",
-			Message: "The request is longer than the model's context window."}
+			Message: "The request is longer than the model's context window."}, router.OutcomeContextTooLong
 	case errors.Is(err, provider.ErrInvalidRequest):
 		return http.StatusBadRequest, errorDetail{Type: typeInvalidRequest, Code: "upstream_invalid_request",
-			Message: "The upstream provider rejected the request as invalid. Check the parameters it was sent."}
+			Message: "The upstream provider rejected the request as invalid. Check the parameters it was sent."}, router.OutcomeInvalidRequest
 	case errors.Is(err, provider.ErrModelUnavailable):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_model_unavailable",
-			Message: "The upstream provider does not offer this route's model to its credential."}
+			Message: "The upstream provider does not offer this route's model to its credential."}, router.OutcomeModelUnavailable
 	case errors.Is(err, router.ErrNoAdapter):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "provider_unavailable",
-			Message: "This route's provider is not available on this gateway."}
+			Message: "This route's provider is not available on this gateway."}, router.OutcomeUnavailable
 	case errors.Is(err, provider.ErrTimeout), errors.Is(err, errDeadline):
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_timeout",
-			Message: "The upstream provider did not answer in time."}
+			Message: "The upstream provider did not answer in time."}, router.OutcomeTimeout
 	default:
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_error",
-			Message: "The upstream provider failed to answer."}
+			Message: "The upstream provider failed to answer."}, router.OutcomeUpstreamError
 	}
 }
 
-// writeUpstreamError answers a failure that happened before the first byte.
-func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) {
+// writeUpstreamError answers a failure that happened before the first byte,
+// and returns the status and outcome it told the client.
+func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) (int, string) {
 	d.logUpstream(r, err)
-	status, detail := upstreamError(err)
+	status, detail, outcome := upstreamError(err)
 	if status == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(provider.RetryAfter(err))))
 	}
 	writeJSON(w, status, errorBody{Error: detail})
+	return status, string(outcome)
 }
 
 func (d Deps) serverError(w http.ResponseWriter, r *http.Request, err error, op string) {

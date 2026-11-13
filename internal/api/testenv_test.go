@@ -33,6 +33,7 @@ import (
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
+	"llm-gateway/internal/usage"
 )
 
 // These tests need the real Postgres and Redis from docker-compose.yml,
@@ -197,6 +198,16 @@ func newTestEnv(t *testing.T) *testEnv {
 		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 
+	// The real recorder over the real store, so a /v1 request in a test shows
+	// up in /api/usage the way it does in production.
+	usageRecorder := usage.NewRecorder(st, 1000, deps.Logger)
+	go usageRecorder.Run(context.Background())
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		usageRecorder.Close(closeCtx)
+	})
+
 	mux := http.NewServeMux()
 	Health(deps.Logger,
 		Check{Name: "postgres", Ping: st.Ping},
@@ -209,6 +220,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Providers: deps.Providers,
 		// In memory, so one test's failing targets are not skipped in the next.
 		Router:  router.New(router.NewMemory(), deps.Logger),
+		Usage:   usageRecorder,
 		Timeout: time.Minute,
 		Limiter: ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
 		Limits: gateway.Limits{

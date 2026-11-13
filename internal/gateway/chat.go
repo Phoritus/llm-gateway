@@ -39,7 +39,14 @@ const writeGrace = 2 * time.Second
 // at it, and a handler blocked reading a body the client is dripping, or
 // writing to a client that stopped reading, looks at nothing.
 func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	deadline := time.Now().Add(d.Timeout)
+	obs := observation{start: time.Now()}
+	deadline := obs.start.Add(d.Timeout)
+	var (
+		key  store.ActiveGatewayKey
+		cost spent
+	)
+	defer func() { d.finish(&obs, key, &cost) }()
+
 	rc := http.NewResponseController(w)
 	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
 	defer cancel()
@@ -80,7 +87,6 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var cost spent
 	defer func() { d.settle(ctx, reserved, &cost) }()
 
 	route, err := d.Routes.ResolveRoute(ctx, key.WorkspaceID, req.Model)
@@ -96,24 +102,29 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		d.serverError(w, r, err, "resolve route")
 		return
 	}
+	obs.routed, obs.alias = true, req.Model
 
 	res, err := d.Router.Run(ctx, route, d.attempt(req))
+	obs.attempts = res.Attempts()
 	if err != nil && clientGone(ctx) {
+		obs.status, obs.outcome = statusClientClosed, store.OutcomeClientGone
 		return
 	}
 	d.logAttempts(r, res.Steps)
 	setFallbackHeaders(w.Header(), res)
 	if err != nil {
-		d.writeUpstreamError(w, r, withDeadline(ctx, err))
+		obs.status, obs.outcome = d.writeUpstreamError(w, r, withDeadline(ctx, err))
 		return
 	}
 	stream, first := res.Stream, res.First
 	defer stream.Close()
 	cost.observe(first)
+	obs.answered, obs.target, obs.firstChunk = true, res.Target, time.Now()
+	obs.status, obs.outcome = http.StatusOK, store.OutcomeOK
 
 	if req.Stream {
 		wantsUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		d.streamResponse(w, r, stream, first, &cost, wantsUsage)
+		obs.outcome = d.streamResponse(w, r, stream, first, &cost, wantsUsage)
 		return
 	}
 
@@ -126,7 +137,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			// Nothing has been written yet, so this is still a status.
-			d.failBeforeFirstByte(w, r, err)
+			obs.status, obs.outcome = d.failBeforeFirstByte(w, r, err)
 			return
 		}
 		cost.observe(chunk)
@@ -189,7 +200,10 @@ func headerSafe(s string) string {
 // The upstream is always asked for usage. A client that did not ask is shown
 // the stream it would have had without it: no usage-only chunk, and no usage
 // field on any other.
-func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk, cost *spent, wantsUsage bool) {
+//
+// It returns how the stream ended. The status was sent with the first chunk,
+// so a stream that fails afterwards is still a 200 and only the outcome says so.
+func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream provider.Stream, first *provider.ChatChunk, cost *spent, wantsUsage bool) string {
 	ctx := r.Context()
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -219,40 +233,40 @@ func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream prov
 	}
 
 	if !sendChunk(first) {
-		return
+		return store.OutcomeClientGone
 	}
 	for {
 		chunk, err := stream.Next()
 		if errors.Is(err, io.EOF) {
 			send([]byte("[DONE]"))
-			return
+			return store.OutcomeOK
 		}
 		if err != nil {
 			if clientGone(ctx) {
-				return
+				return store.OutcomeClientGone
 			}
 			err = withDeadline(ctx, err)
 			d.logUpstream(r, err)
-			_, detail := upstreamError(err)
+			_, detail, _ := upstreamError(err)
 			b, _ := json.Marshal(errorBody{Error: detail})
 			send(b)
-			return
+			return store.OutcomeStreamError
 		}
 		cost.observe(chunk)
 		if !sendChunk(chunk) {
-			return
+			return store.OutcomeClientGone
 		}
 	}
 }
 
 // failBeforeFirstByte answers an upstream failure while a status line can
 // still be sent. A client that has gone away gets nothing: there is no one to
-// read it.
-func (d Deps) failBeforeFirstByte(w http.ResponseWriter, r *http.Request, err error) {
+// read it. It returns the status and outcome for the usage record.
+func (d Deps) failBeforeFirstByte(w http.ResponseWriter, r *http.Request, err error) (int, string) {
 	if clientGone(r.Context()) {
-		return
+		return statusClientClosed, store.OutcomeClientGone
 	}
-	d.writeUpstreamError(w, r, withDeadline(r.Context(), err))
+	return d.writeUpstreamError(w, r, withDeadline(r.Context(), err))
 }
 
 // clientGone reports that the request was cancelled for a reason other than
