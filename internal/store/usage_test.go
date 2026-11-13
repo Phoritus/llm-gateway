@@ -1,7 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,7 +15,7 @@ import (
 
 func usageEvent(workspaceID, route string, at time.Time, mutate ...func(*UsageEvent)) UsageEvent {
 	e := UsageEvent{
-		WorkspaceID: workspaceID, KeyID: uuid.NewString(), RouteAlias: route,
+		ID: uuid.NewString(), WorkspaceID: workspaceID, KeyID: uuid.NewString(), RouteAlias: route,
 		Vendor: "groq", Model: "llama", Status: 200, Outcome: OutcomeOK, Attempts: 1,
 		PromptTokens: 10, CompletionTokens: 5, LatencyMs: 100, TTFTMs: 20, CreatedAt: at,
 	}
@@ -85,6 +90,145 @@ func TestBatchesAddUp(t *testing.T) {
 	days := dailyOf(t, st, ws, "chat")
 	if len(days) != 1 || days[0].Requests != 3 || days[0].PromptTokens != 30 {
 		t.Fatalf("rollup = %+v, want one row of 3 requests", days)
+	}
+}
+
+func TestARetriedBatchCountsOnce(t *testing.T) {
+	st := newTestStore(t)
+	ws := signup(t, st, "alice@example.com").WorkspaceID
+	at := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	batch := []UsageEvent{usageEvent(ws, "chat", at), usageEvent(ws, "chat", at)}
+
+	writeUsage(t, st, batch...)
+	writeUsage(t, st, batch...)
+	if days := dailyOf(t, st, ws, "chat"); len(days) != 1 || days[0].Requests != 2 || days[0].PromptTokens != 20 {
+		t.Fatalf("rollup after the same batch twice = %+v, want one row of 2 requests", days)
+	}
+	if n := count(t, st, "usage_events"); n != 2 {
+		t.Errorf("stored %d raw events, want 2", n)
+	}
+
+	// A batch that mixes a stored event with a new one adds only the new one.
+	writeUsage(t, st, batch[0], usageEvent(ws, "chat", at))
+	if days := dailyOf(t, st, ws, "chat"); days[0].Requests != 3 {
+		t.Errorf("rollup = %+v, want 3 requests", days)
+	}
+}
+
+// replyDroppingProxy forwards TCP to upstream. Once armed, it swallows every
+// reply on the first connection whose client sends marker, so that client's
+// statement runs on the server and the client never hears that it did.
+func replyDroppingProxy(t *testing.T, upstream string, marker []byte) (addr string, arm func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var armed atomic.Bool
+
+	serve := func(client net.Conn) {
+		server, err := net.Dial("tcp", upstream)
+		if err != nil {
+			_ = client.Close()
+			return
+		}
+		var mute atomic.Bool
+		go func() {
+			defer server.Close()
+			buf := make([]byte, 64<<10)
+			for {
+				n, err := client.Read(buf)
+				if n > 0 {
+					if bytes.Contains(buf[:n], marker) && armed.CompareAndSwap(true, false) {
+						mute.Store(true)
+					}
+					if _, werr := server.Write(buf[:n]); werr != nil {
+						return
+					}
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+		defer client.Close()
+		buf := make([]byte, 64<<10)
+		for {
+			n, err := server.Read(buf)
+			if n > 0 && !mute.Load() {
+				if _, werr := client.Write(buf[:n]); werr != nil {
+					_, _ = io.Copy(io.Discard, server)
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	go func() {
+		for {
+			client, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serve(client)
+		}
+	}()
+	return ln.Addr().String(), func() { armed.Store(true) }
+}
+
+func TestABatchRetriedAfterALostAcknowledgementCountsOnce(t *testing.T) {
+	st := newTestStore(t)
+	ws := signup(t, st, "alice@example.com").WorkspaceID
+	const route = "route-whose-reply-is-lost"
+
+	u, err := url.Parse(st.pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("parse the store's url: %v", err)
+	}
+	var arm func()
+	u.Host, arm = replyDroppingProxy(t, u.Host, []byte(route))
+	proxied, err := Open(context.Background(), u.String())
+	if err != nil {
+		t.Fatalf("open through the proxy: %v", err)
+	}
+	defer proxied.Close()
+
+	batch := []UsageEvent{usageEvent(ws, route, time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC))}
+	arm()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := proxied.WriteBatch(ctx, batch); err == nil {
+		t.Fatal("the first write heard a reply the proxy should have dropped")
+	}
+	if n := count(t, st, "usage_events"); n != 1 {
+		t.Fatalf("the unacknowledged write stored %d events, want 1: the test did not lose an acknowledgement", n)
+	}
+
+	if err := proxied.WriteBatch(context.Background(), batch); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	days := dailyOf(t, st, ws, route)
+	if n := count(t, st, "usage_events"); n != 1 || len(days) != 1 || days[0].Requests != 1 {
+		t.Errorf("one request retried after a lost acknowledgement: %d events, rollup %+v; want 1 and 1", n, days)
+	}
+}
+
+func TestTokenCountsPastInt32AreStored(t *testing.T) {
+	st := newTestStore(t)
+	ws := signup(t, st, "alice@example.com").WorkspaceID
+	at := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	huge := func(e *UsageEvent) { e.PromptTokens, e.CompletionTokens, e.LatencyMs, e.TTFTMs = 3e9, 3e9, 3e9, 3e9 }
+
+	writeUsage(t, st, usageEvent(ws, "chat", at, huge))
+	recent, err := st.Recent(context.Background(), ws, 1)
+	if err != nil || len(recent) != 1 || recent[0].PromptTokens != 3e9 || recent[0].TTFTMs != 3e9 {
+		t.Fatalf("recent = %+v (%v), want the event as it was written", recent, err)
+	}
+	if days := dailyOf(t, st, ws, "chat"); len(days) != 1 || days[0].PromptTokens != 3e9 || days[0].LatencyMsSum != 3e9 {
+		t.Errorf("rollup = %+v", days)
 	}
 }
 

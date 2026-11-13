@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -91,6 +92,9 @@ func (r *Recorder) RegisterMetrics() error {
 
 // Record queues an event and returns at once. A full queue gives up its oldest
 // event for the new one: the freshest usage is the more useful to lose last.
+//
+// The event's ID is minted here, once, so every attempt to write it names the
+// same row.
 func (r *Recorder) Record(e Event) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -98,6 +102,7 @@ func (r *Recorder) Record(e Event) {
 		countDropped(1, reasonOverflow)
 		return
 	}
+	e.ID = uuid.NewString()
 	select {
 	case r.queue <- e:
 		return

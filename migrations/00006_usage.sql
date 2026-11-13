@@ -1,12 +1,12 @@
 -- +goose Up
 -- +goose StatementBegin
 
--- One row per request that resolved a route. key_id has no foreign key: keys
--- are soft-deleted, and this is the hottest insert path in the schema. Alias,
--- vendor and model are plain text so the history outlives the route and
--- credential it names.
+-- One row per request that resolved a route. id is minted by the gateway when
+-- it records the request, so a batch written twice stores each event once.
+-- key_id has no foreign key, and alias, vendor and model are plain text, so
+-- the history outlives the key, route and credential it names.
 CREATE TABLE usage_events (
-    id                bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id                uuid        PRIMARY KEY,
     workspace_id      uuid        NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
     key_id            uuid        NOT NULL,
     route_alias       text        NOT NULL,
@@ -15,10 +15,12 @@ CREATE TABLE usage_events (
     status            integer     NOT NULL,
     outcome           text        NOT NULL,
     attempts          integer     NOT NULL,
-    prompt_tokens     integer     NOT NULL,
-    completion_tokens integer     NOT NULL,
-    latency_ms        integer     NOT NULL,
-    ttft_ms           integer     NOT NULL,
+    -- bigint: the token counts are whatever the upstream reported, and one
+    -- row out of range would fail the batch it is written in.
+    prompt_tokens     bigint      NOT NULL,
+    completion_tokens bigint      NOT NULL,
+    latency_ms        bigint      NOT NULL,
+    ttft_ms           bigint      NOT NULL,
     cached            boolean     NOT NULL DEFAULT false,
     created_at        timestamptz NOT NULL
 );

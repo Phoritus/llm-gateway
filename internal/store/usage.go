@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,8 +19,16 @@ const (
 	OutcomeClientGone  Outcome = "client_gone"
 )
 
+// notErrors are the outcomes the rollup leaves out of its error count. A
+// client that hung up is not the service failing.
+var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone)}
+
 // UsageEvent is one request that resolved a route.
 type UsageEvent struct {
+	// ID is a UUID minted once by whoever records the event. WriteBatch stores
+	// an ID once however often it is handed it, which is what makes a retry
+	// safe.
+	ID          string
 	WorkspaceID string
 	KeyID       string
 	RouteAlias  string
@@ -37,16 +43,11 @@ type UsageEvent struct {
 	PromptTokens     int
 	CompletionTokens int
 	LatencyMs        int
-	// TTFTMs is zero when no chunk arrived.
+	// TTFTMs is zero when no chunk arrived, and when the first one took under
+	// a millisecond.
 	TTFTMs    int
 	Cached    bool
 	CreatedAt time.Time
-}
-
-// Failed reports whether the event counts as an error in the rollup. A client
-// that hung up is not the service failing.
-func (e UsageEvent) Failed() bool {
-	return e.Outcome != OutcomeOK && e.Outcome != OutcomeClientGone
 }
 
 // UsageDay is one day's totals for a route, vendor and model.
@@ -62,114 +63,64 @@ type UsageDay struct {
 	LatencyMsSum     int64
 }
 
-// dayKey identifies one rollup row.
-type dayKey struct {
-	workspaceID string
-	day         time.Time
-	route       string
-	vendor      string
-	model       string
-}
-
-func (a dayKey) compare(b dayKey) int {
-	for _, c := range []int{
-		strings.Compare(a.workspaceID, b.workspaceID),
-		a.day.Compare(b.day),
-		strings.Compare(a.route, b.route),
-		strings.Compare(a.vendor, b.vendor),
-		strings.Compare(a.model, b.model),
-	} {
-		if c != 0 {
-			return c
-		}
-	}
-	return 0
-}
-
 // WriteBatch stores events and adds them to the daily rollup in one
-// transaction. A batch that fails counts nothing, and a retried one counts
-// once.
+// statement. A batch that fails counts nothing. An event whose ID is already
+// stored is skipped and adds nothing to the rollup, so a batch retried after
+// its acknowledgement was lost counts once.
 func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin usage batch: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	rows := make([][]any, len(events))
-	totals := map[dayKey]*UsageDay{}
-	for i, e := range events {
-		rows[i] = []any{e.WorkspaceID, e.KeyID, e.RouteAlias, e.Vendor, e.Model, e.Status, e.Outcome,
-			e.Attempts, e.PromptTokens, e.CompletionTokens, e.LatencyMs, e.TTFTMs, e.Cached, e.CreatedAt}
-
-		day := e.CreatedAt.UTC().Truncate(24 * time.Hour)
-		k := dayKey{e.WorkspaceID, day, e.RouteAlias, e.Vendor, e.Model}
-		t := totals[k]
-		if t == nil {
-			t = &UsageDay{}
-			totals[k] = t
-		}
-		t.Requests++
-		if e.Failed() {
-			t.Errors++
-		}
-		t.PromptTokens += int64(e.PromptTokens)
-		t.CompletionTokens += int64(e.CompletionTokens)
-		t.LatencyMsSum += int64(e.LatencyMs)
-	}
-
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"usage_events"},
-		[]string{"workspace_id", "key_id", "route_alias", "vendor", "model", "status", "outcome", "attempts",
-			"prompt_tokens", "completion_tokens", "latency_ms", "ttft_ms", "cached", "created_at"},
-		pgx.CopyFromRows(rows)); err != nil {
-		return fmt.Errorf("insert usage events: %w", err)
-	}
-
-	// Sorted so that two instances upserting overlapping rows take the row
-	// locks in the same order and cannot deadlock.
-	keys := make([]dayKey, 0, len(totals))
-	for k := range totals {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, dayKey.compare)
-
-	n := len(keys)
+	n := len(events)
 	var (
-		ws, route, vendor, model []string
-		days                     []time.Time
-		requests                 = make([]int64, 0, n)
-		errs                     = make([]int64, 0, n)
-		prompt                   = make([]int64, 0, n)
-		completion               = make([]int64, 0, n)
-		latency                  = make([]int64, 0, n)
+		ids, ws, keys, route, vendor, model, outcome = make([]string, n), make([]string, n), make([]string, n),
+			make([]string, n), make([]string, n), make([]string, n), make([]string, n)
+		status, attempts                = make([]int32, n), make([]int32, n)
+		prompt, completion, latency, tt = make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
+		cached                          = make([]bool, n)
+		created                         = make([]time.Time, n)
 	)
-	for _, k := range keys {
-		t := totals[k]
-		ws, days = append(ws, k.workspaceID), append(days, k.day)
-		route, vendor, model = append(route, k.route), append(vendor, k.vendor), append(model, k.model)
-		requests, errs = append(requests, t.Requests), append(errs, t.Errors)
-		prompt, completion = append(prompt, t.PromptTokens), append(completion, t.CompletionTokens)
-		latency = append(latency, t.LatencyMsSum)
+	for i, e := range events {
+		ids[i], ws[i], keys[i] = e.ID, e.WorkspaceID, e.KeyID
+		route[i], vendor[i], model[i], outcome[i] = e.RouteAlias, e.Vendor, e.Model, string(e.Outcome)
+		status[i], attempts[i] = int32(e.Status), int32(e.Attempts)
+		prompt[i], completion[i] = int64(e.PromptTokens), int64(e.CompletionTokens)
+		latency[i], tt[i] = int64(e.LatencyMs), int64(e.TTFTMs)
+		cached[i], created[i] = e.Cached, e.CreatedAt
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO usage_daily (workspace_id, day, route_alias, vendor, model,
+
+	// The rollup is built from the rows the insert returns, not from the
+	// batch, so it counts exactly what was stored. It is ordered so that two
+	// instances upserting overlapping rows take the row locks in the same
+	// order and cannot deadlock.
+	if _, err := s.pool.Exec(ctx,
+		`WITH stored AS (
+		     INSERT INTO usage_events (id, workspace_id, key_id, route_alias, vendor, model, status, outcome,
+		                               attempts, prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at)
+		     SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::int[],
+		                          $8::text[], $9::int[], $10::bigint[], $11::bigint[], $12::bigint[], $13::bigint[],
+		                          $14::boolean[], $15::timestamptz[])
+		     ON CONFLICT (id) DO NOTHING
+		     RETURNING workspace_id, created_at, route_alias, vendor, model, outcome,
+		               prompt_tokens, completion_tokens, latency_ms
+		 )
+		 INSERT INTO usage_daily (workspace_id, day, route_alias, vendor, model,
 		                          requests, errors, prompt_tokens, completion_tokens, latency_ms_sum)
-		 SELECT * FROM unnest($1::uuid[], $2::date[], $3::text[], $4::text[], $5::text[],
-		                      $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[], $10::bigint[])
+		 SELECT workspace_id, (created_at AT TIME ZONE 'UTC')::date, route_alias, vendor, model,
+		        count(*), count(*) FILTER (WHERE outcome <> ALL($16::text[])),
+		        sum(prompt_tokens), sum(completion_tokens), sum(latency_ms)
+		   FROM stored
+		  GROUP BY 1, 2, 3, 4, 5
+		  ORDER BY 1, 2, 3, 4, 5
 		 ON CONFLICT (workspace_id, day, route_alias, vendor, model) DO UPDATE SET
 		     requests          = usage_daily.requests + EXCLUDED.requests,
 		     errors            = usage_daily.errors + EXCLUDED.errors,
 		     prompt_tokens     = usage_daily.prompt_tokens + EXCLUDED.prompt_tokens,
 		     completion_tokens = usage_daily.completion_tokens + EXCLUDED.completion_tokens,
 		     latency_ms_sum    = usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum`,
-		ws, days, route, vendor, model, requests, errs, prompt, completion, latency); err != nil {
-		return fmt.Errorf("upsert usage rollup: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit usage batch: %w", err)
+		ids, ws, keys, route, vendor, model, status, outcome, attempts, prompt, completion, latency, tt,
+		cached, created, notErrors); err != nil {
+		return fmt.Errorf("write usage batch: %w", err)
 	}
 	return nil
 }

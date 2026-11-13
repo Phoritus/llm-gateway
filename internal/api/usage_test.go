@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"llm-gateway/internal/store"
 )
 
@@ -14,7 +16,7 @@ func (e *testEnv) writeUsage(workspaceID, route string, at time.Time, n int) {
 	events := make([]store.UsageEvent, n)
 	for i := range events {
 		events[i] = store.UsageEvent{
-			WorkspaceID: workspaceID, KeyID: "00000000-0000-4000-8000-000000000001", RouteAlias: route,
+			ID: uuid.NewString(), WorkspaceID: workspaceID, KeyID: "00000000-0000-4000-8000-000000000001", RouteAlias: route,
 			Vendor: "groq", Model: "llama", Status: 200, Outcome: store.OutcomeOK, Attempts: 1,
 			PromptTokens: 10, CompletionTokens: 5, LatencyMs: 100, TTFTMs: 20, CreatedAt: at,
 		}
