@@ -121,6 +121,8 @@ func Routes(d Deps) http.Handler {
 			r.Post("/routes", d.handleCreateRoute)
 			r.Put("/routes/{id}", d.handleUpdateRoute)
 			r.Delete("/routes/{id}", d.handleDeleteRoute)
+
+			r.Get("/usage", d.handleUsage)
 		})
 	})
 
