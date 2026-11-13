@@ -53,6 +53,10 @@ func normalizeOrigin(raw string) string {
 	return strings.ToLower(strings.TrimRight(strings.TrimSpace(raw), "/"))
 }
 
+// minUsageRetention keeps the recent-requests list the dashboard shows from
+// being pruned out from under it.
+const minUsageRetention = 24 * time.Hour
+
 // Config is the fully validated configuration. Every field is resolved at
 // startup; nothing reads os.Getenv after Load returns.
 type Config struct {
@@ -83,10 +87,16 @@ type Config struct {
 	// V1WorkspaceConcurrency caps a workspace's requests in flight on one
 	// instance. Long streams are what exhaust memory first.
 	V1WorkspaceConcurrency int
-	CookieDomain           string
-	TrustedProxies         []netip.Prefix
-	MailFrom               string
-	PublicBaseURL          string
+	// UsageQueueSize is how many usage events wait to be written. A full queue
+	// drops its oldest, so this bounds memory while the database is slow.
+	UsageQueueSize int
+	// UsageRetention is how long raw usage events are kept. The daily rollup
+	// is kept for good.
+	UsageRetention time.Duration
+	CookieDomain   string
+	TrustedProxies []netip.Prefix
+	MailFrom       string
+	PublicBaseURL  string
 	// SMTPURL is the relay verification and reset mail goes through, as
 	// smtp://user:pass@host:587 or smtps://user:pass@host:465. Empty is
 	// allowed only outside production, where mail goes to the log instead.
@@ -266,6 +276,19 @@ func Load() (*Config, error) {
 		} else {
 			*limit.field = n
 		}
+	}
+
+	if n, err := positiveIntOr("USAGE_QUEUE_SIZE", 10_000); err != nil {
+		fail("%v", err)
+	} else {
+		cfg.UsageQueueSize = n
+	}
+	if d, err := durationOr("USAGE_RETENTION", 30*24*time.Hour); err != nil {
+		fail("%v", err)
+	} else if d < minUsageRetention {
+		fail("USAGE_RETENTION must be at least %s, got %s", minUsageRetention, d)
+	} else {
+		cfg.UsageRetention = d
 	}
 
 	// Mail is load-bearing, not decorative: an account cannot be used until its

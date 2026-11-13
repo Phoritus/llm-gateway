@@ -29,6 +29,16 @@ import (
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
+	"llm-gateway/internal/usage"
+)
+
+const (
+	// usageFlushTimeout is what shutdown spends writing the usage events still
+	// queued, counted from when the last request has finished.
+	usageFlushTimeout = 10 * time.Second
+	// retentionInterval is how often old raw usage events are pruned. Nothing
+	// depends on the exact cadence, so it is not configuration.
+	retentionInterval = time.Hour
 )
 
 func main() {
@@ -190,11 +200,16 @@ func run(logger *slog.Logger) error {
 	mux.Handle("/api/", http.StripPrefix("/api", api.Routes(deps)))
 
 	fallback := router.New(router.NewRedis(rdb), logger)
+	usageRecorder := usage.NewRecorder(st, cfg.UsageQueueSize, logger)
+	if err := usageRecorder.RegisterMetrics(); err != nil {
+		return err
+	}
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      gatewayKeys,
 		Routes:    deps.Credentials,
 		Providers: providers,
 		Router:    fallback,
+		Usage:     usageRecorder,
 		Timeout:   cfg.V1RequestTimeout,
 		Limiter:   ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger),
 		Limits: gateway.Limits{
@@ -236,6 +251,8 @@ func run(logger *slog.Logger) error {
 		<-flusherDone
 	}()
 	go authSvc.RunSweeper(sweeperCtx, 0, logger)
+	go usageRecorder.Run(sweeperCtx)
+	go usage.RunRetention(sweeperCtx, st, cfg.UsageRetention, retentionInterval, logger)
 	go func() {
 		defer close(flusherDone)
 		gatewayKeys.RunLastUsedFlusher(sweeperCtx, logger)
@@ -259,8 +276,12 @@ func run(logger *slog.Logger) error {
 	}
 
 	// Stop accepting, let in-flight requests finish, then let the deferred
-	// closes run. Streaming responses get the same window, which is why the
-	// timeout is generous rather than immediate.
+	// closes run.
+	//
+	// A stream still running when the window ends is cut, and V1_REQUEST_TIMEOUT
+	// (5m) is far longer than this. A longer window would not save it: Render
+	// sends SIGKILL about 30s after SIGTERM, so any timeout past that is never
+	// reached. The client sees the connection drop and retries.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
@@ -270,6 +291,11 @@ func run(logger *slog.Logger) error {
 	// The last failures' skips are still being written, and the deferred
 	// Redis close would cut them off.
 	fallback.Wait()
+	// Last among the writers: every handler has finished, so every event that
+	// will ever be recorded is queued. The pool closes after this.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), usageFlushTimeout)
+	defer cancelFlush()
+	usageRecorder.Close(flushCtx)
 	logger.Info("stopped")
 	return nil
 }

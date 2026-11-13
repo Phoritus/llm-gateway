@@ -36,6 +36,7 @@ func apply(t *testing.T, env map[string]string) {
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
+		"USAGE_QUEUE_SIZE", "USAGE_RETENTION",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -299,6 +300,26 @@ func TestLoadOwnsTheV1RequestTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadOwnsTheUsageSettings(t *testing.T) {
+	apply(t, productionEnv(t))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if cfg.UsageQueueSize != 10_000 || cfg.UsageRetention != 30*24*time.Hour {
+		t.Errorf("defaults = %d, %s; want 10000, 720h", cfg.UsageQueueSize, cfg.UsageRetention)
+	}
+
+	for key, bad := range map[string]string{"USAGE_QUEUE_SIZE": "0", "USAGE_RETENTION": "1h"} {
+		env := productionEnv(t)
+		env[key] = bad
+		apply(t, env)
+		if _, err := Load(); err == nil {
+			t.Errorf("Load() with %s=%s = nil error, want a refusal", key, bad)
+		}
+	}
+}
+
 func TestLoadOwnsTheV1Limits(t *testing.T) {
 	apply(t, productionEnv(t))
 	cfg, err := Load()
@@ -321,6 +342,7 @@ func TestLoadOwnsTheV1Limits(t *testing.T) {
 	// every one too, so neither is accepted as a way to say "unlimited".
 	for _, key := range []string{
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
+		"USAGE_QUEUE_SIZE", "USAGE_RETENTION",
 	} {
 		for _, bad := range []string{"0", "-1", "many", "1.5"} {
 			env := productionEnv(t)
