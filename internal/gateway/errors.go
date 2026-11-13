@@ -85,8 +85,7 @@ func upstreamError(err error) (int, errorDetail, store.Outcome) {
 	}
 }
 
-// writeUpstreamError answers a failure that happened before the first byte,
-// and returns the status and outcome it told the client.
+// writeUpstreamError answers a failure that happened before the first byte.
 func (d Deps) writeUpstreamError(w http.ResponseWriter, r *http.Request, err error) (int, store.Outcome) {
 	d.logUpstream(r, err)
 	status, detail, outcome := upstreamError(err)

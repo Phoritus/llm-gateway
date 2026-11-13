@@ -57,10 +57,6 @@ func normalizeOrigin(raw string) string {
 // back for the flushes that follow them is taken out.
 const minShutdownTimeout = 5 * time.Second
 
-// minUsageRetention keeps the recent-requests list the dashboard shows from
-// being pruned out from under it.
-const minUsageRetention = 24 * time.Hour
-
 // Config is the fully validated configuration. Every field is resolved at
 // startup; nothing reads os.Getenv after Load returns.
 type Config struct {
@@ -298,8 +294,6 @@ func Load() (*Config, error) {
 	}
 	if d, err := durationOr("USAGE_RETENTION", 30*24*time.Hour); err != nil {
 		fail("%v", err)
-	} else if d < minUsageRetention {
-		fail("USAGE_RETENTION must be at least %s, got %s", minUsageRetention, d)
 	} else {
 		cfg.UsageRetention = d
 	}

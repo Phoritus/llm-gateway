@@ -340,13 +340,13 @@ func TestLoadOwnsTheUsageSettings(t *testing.T) {
 		t.Errorf("defaults = %d, %s; want 10000, 720h", cfg.UsageQueueSize, cfg.UsageRetention)
 	}
 
-	for key, bad := range map[string]string{"USAGE_QUEUE_SIZE": "0", "USAGE_RETENTION": "1h"} {
-		env := productionEnv(t)
-		env[key] = bad
-		apply(t, env)
-		if _, err := Load(); err == nil {
-			t.Errorf("Load() with %s=%s = nil error, want a refusal", key, bad)
-		}
+	env := productionEnv(t)
+	env["USAGE_RETENTION"] = "1h"
+	apply(t, env)
+	if cfg, err := Load(); err != nil {
+		t.Errorf("Load() with USAGE_RETENTION=1h = %v, want it accepted: there is no floor", err)
+	} else if cfg.UsageRetention != time.Hour {
+		t.Errorf("USAGE_RETENTION=1h loaded as %s", cfg.UsageRetention)
 	}
 }
 

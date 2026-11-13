@@ -66,8 +66,7 @@ type shutdownPlan struct {
 	drainBy time.Time
 	// flushBy is when the usage flush stops, leaving the rest to telemetry.
 	flushBy time.Time
-	// stopBy is the end of the budget.
-	stopBy time.Time
+	stopBy  time.Time
 }
 
 func planShutdown(signalled time.Time, budget time.Duration) shutdownPlan {

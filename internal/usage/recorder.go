@@ -15,12 +15,11 @@ import (
 )
 
 const (
-	// batchSize is the most events one transaction carries.
+	// batchSize is the most events one statement carries.
 	batchSize = 200
 	// flushEvery is how long an event waits for company before it is written.
 	flushEvery = time.Second
-	// retryWait is the pause before a failed batch is tried a second time.
-	retryWait = time.Second
+	retryWait  = time.Second
 	// writeTimeout bounds one attempt at a batch, and the whole of writing a
 	// failed batch one event at a time, so that an unreachable database costs
 	// the queue seconds of draining rather than all of it.
@@ -38,7 +37,6 @@ const (
 var dropped, _ = otel.Meter("llm-gateway/usage").Int64Counter("usage.events.dropped",
 	metric.WithDescription("Usage events lost, by reason."))
 
-// Event is one request that resolved a route.
 type Event = store.UsageEvent
 
 // Writer stores a batch of events and their rollup in one step.

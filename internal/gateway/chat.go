@@ -261,7 +261,7 @@ func (d Deps) streamResponse(w http.ResponseWriter, r *http.Request, stream prov
 
 // failBeforeFirstByte answers an upstream failure while a status line can
 // still be sent. A client that has gone away gets nothing: there is no one to
-// read it. It returns the status and outcome for the usage record.
+// read it.
 func (d Deps) failBeforeFirstByte(w http.ResponseWriter, r *http.Request, err error) (int, store.Outcome) {
 	if clientGone(r.Context()) {
 		return statusClientClosed, store.OutcomeClientGone
