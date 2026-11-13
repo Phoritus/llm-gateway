@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -44,10 +45,14 @@ func droppedFor(t *testing.T, reason string) int64 {
 }
 
 type fakeWriter struct {
-	mu      sync.Mutex
-	batches [][]Event
-	calls   int
-	failing int
+	mu sync.Mutex
+	// attempts is every batch handed over, written or not.
+	attempts [][]Event
+	batches  [][]Event
+	calls    int
+	failing  int
+	// refuses fails any batch holding an event it reports true for.
+	refuses func(Event) bool
 	block   chan struct{}
 }
 
@@ -62,8 +67,12 @@ func (w *fakeWriter) WriteBatch(ctx context.Context, events []Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.calls++
+	w.attempts = append(w.attempts, append([]Event(nil), events...))
 	if w.calls <= w.failing {
 		return errors.New("database down")
+	}
+	if w.refuses != nil && slices.ContainsFunc(events, w.refuses) {
+		return errors.New("value out of range")
 	}
 	w.batches = append(w.batches, append([]Event(nil), events...))
 	return nil
@@ -246,7 +255,7 @@ func TestAFailedBatchThatSucceedsOnRetryIsNotDropped(t *testing.T) {
 
 func TestCloseGivesUpWhenItsDeadlinePasses(t *testing.T) {
 	metricReader()
-	before := droppedFor(t, reasonWriteFailed)
+	before := droppedFor(t, reasonShutdown)
 	w := &fakeWriter{block: make(chan struct{})}
 	r := NewRecorder(w, 100, nil)
 	r.flushEvery = time.Hour
@@ -258,7 +267,74 @@ func TestCloseGivesUpWhenItsDeadlinePasses(t *testing.T) {
 	if time.Since(start) > 3*time.Second {
 		t.Fatal("Close outlived its deadline")
 	}
+	if got := droppedFor(t, reasonShutdown) - before; got != 1 {
+		t.Errorf("counted %d events dropped for shutdown, want the 1 left unwritten", got)
+	}
+}
+
+func TestAnEventRecordedAfterCloseIsDroppedForShutdown(t *testing.T) {
+	metricReader()
+	r := started(t, &fakeWriter{}, 10)
+	closeWithin(t, r, 5*time.Second)
+	overflow, shutdown := droppedFor(t, reasonOverflow), droppedFor(t, reasonShutdown)
+
+	r.Record(ev("late"))
+	if got := droppedFor(t, reasonOverflow) - overflow; got != 0 {
+		t.Errorf("counted %d overflow drops with an empty queue", got)
+	}
+	if got := droppedFor(t, reasonShutdown) - shutdown; got != 1 {
+		t.Errorf("counted %d shutdown drops, want 1", got)
+	}
+}
+
+func TestOneRefusedEventCostsOnlyItself(t *testing.T) {
+	metricReader()
+	before := droppedFor(t, reasonWriteFailed)
+	w := &fakeWriter{refuses: func(e Event) bool { return e.RouteAlias == "refused" }}
+	r := NewRecorder(w, 100, nil)
+	r.retryWait = time.Millisecond
+	for _, e := range []Event{
+		{WorkspaceID: "alice", RouteAlias: "chat"},
+		{WorkspaceID: "bob", RouteAlias: "refused"},
+		{WorkspaceID: "carol", RouteAlias: "chat"},
+	} {
+		r.Record(e)
+	}
+	go r.Run(context.Background())
+	closeWithin(t, r, 5*time.Second)
+
+	var kept []string
+	for _, b := range w.batches {
+		for _, e := range b {
+			kept = append(kept, e.WorkspaceID)
+		}
+	}
+	if !slices.Equal(kept, []string{"alice", "carol"}) {
+		t.Errorf("stored events of %v, want alice and carol: one workspace's refused event took the others with it", kept)
+	}
 	if got := droppedFor(t, reasonWriteFailed) - before; got != 1 {
-		t.Errorf("counted %d dropped events, want the 1 left unwritten", got)
+		t.Errorf("counted %d failed writes, want the 1 refused event", got)
+	}
+}
+
+func TestARetryCarriesTheIDsOfTheFirstAttempt(t *testing.T) {
+	w := &fakeWriter{failing: 1}
+	r := NewRecorder(w, 100, nil)
+	r.retryWait = time.Millisecond
+	r.Record(ev("chat"))
+	r.Record(ev("chat"))
+	go r.Run(context.Background())
+	closeWithin(t, r, 5*time.Second)
+
+	if len(w.attempts) != 2 || len(w.attempts[0]) != 2 {
+		t.Fatalf("attempts = %+v, want one batch of 2 tried twice", w.attempts)
+	}
+	first, retry := w.attempts[0], w.attempts[1]
+	if first[0].ID == "" || first[0].ID == first[1].ID {
+		t.Errorf("ids %q and %q, want two distinct ids", first[0].ID, first[1].ID)
+	}
+	if first[0].ID != retry[0].ID || first[1].ID != retry[1].ID {
+		t.Errorf("the retry carried ids %q, %q, not the first attempt's %q, %q: the store cannot tell it is a retry",
+			retry[0].ID, retry[1].ID, first[0].ID, first[1].ID)
 	}
 }

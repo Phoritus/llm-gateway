@@ -21,8 +21,9 @@ const (
 	flushEvery = time.Second
 	// retryWait is the pause before a failed batch is tried a second time.
 	retryWait = time.Second
-	// writeTimeout bounds one attempt, so that an unreachable database costs
-	// the queue a few seconds of draining rather than all of it.
+	// writeTimeout bounds one attempt at a batch, and the whole of writing a
+	// failed batch one event at a time, so that an unreachable database costs
+	// the queue seconds of draining rather than all of it.
 	writeTimeout = 10 * time.Second
 )
 
@@ -31,6 +32,7 @@ const (
 const (
 	reasonOverflow    = "overflow"
 	reasonWriteFailed = "write_failed"
+	reasonShutdown    = "shutdown"
 )
 
 var dropped, _ = otel.Meter("llm-gateway/usage").Int64Counter("usage.events.dropped",
@@ -99,7 +101,7 @@ func (r *Recorder) Record(e Event) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.closed {
-		countDropped(1, reasonOverflow)
+		countDropped(1, reasonShutdown)
 		return
 	}
 	e.ID = uuid.NewString()
@@ -169,39 +171,79 @@ func (r *Recorder) Run(ctx context.Context) {
 				}
 			}
 			if lost > 0 {
-				countDropped(lost, reasonWriteFailed)
+				countDropped(lost, reasonShutdown)
 			}
 			return
 		}
 	}
 }
 
-// write tries a batch twice. The second failure drops it: a database that is
-// down must not hold the queue, which overflows by itself soon enough.
+// write stores a batch. A batch that fails twice is written one event at a
+// time: the database refuses a whole batch for one row it cannot store, and
+// that row's workspace must not cost every other workspace its events. A
+// database that is down fails those writes too, inside one writeTimeout, so
+// it cannot hold the queue, which overflows by itself soon enough.
 func (r *Recorder) write(batch []Event) {
-	var err error
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-time.After(r.retryWait):
-			case <-r.runCtx.Done():
-			}
+	err := r.attempt(r.runCtx, batch, 1)
+	if err != nil {
+		select {
+		case <-time.After(r.retryWait):
+			err = r.attempt(r.runCtx, batch, 2)
+		case <-r.runCtx.Done():
 		}
-		ctx, cancel := context.WithTimeout(r.runCtx, writeTimeout)
-		err = r.writer.WriteBatch(ctx, batch)
-		cancel()
-		if err == nil {
-			return
-		}
-		r.logger.Warn("usage batch write failed",
-			slog.Int("events", len(batch)), slog.Int("attempt", attempt+1), slog.String("error", err.Error()))
 	}
-	countDropped(len(batch), reasonWriteFailed)
+	switch {
+	case err == nil:
+		return
+	case r.runCtx.Err() != nil:
+		countDropped(len(batch), reasonShutdown)
+		return
+	case len(batch) == 1:
+		countDropped(1, reasonWriteFailed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.runCtx, writeTimeout)
+	defer cancel()
+	failed := 0
+	for i := range batch {
+		one := r.writer.WriteBatch(ctx, batch[i:i+1])
+		if one == nil {
+			continue
+		}
+		err = one
+		if ctx.Err() != nil {
+			rest := len(batch) - i
+			if r.runCtx.Err() != nil {
+				countDropped(rest, reasonShutdown)
+			} else {
+				failed += rest
+			}
+			break
+		}
+		failed++
+	}
+	if failed > 0 {
+		countDropped(failed, reasonWriteFailed)
+		r.logger.Warn("usage events dropped after writing their batch one at a time",
+			slog.Int("events", failed), slog.Int("batch", len(batch)), slog.String("error", err.Error()))
+	}
+}
+
+func (r *Recorder) attempt(ctx context.Context, batch []Event, n int) error {
+	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	err := r.writer.WriteBatch(ctx, batch)
+	if err != nil {
+		r.logger.Warn("usage batch write failed",
+			slog.Int("events", len(batch)), slog.Int("attempt", n), slog.String("error", err.Error()))
+	}
+	return err
 }
 
 // Close stops accepting events and waits for the queue to be written. When ctx
 // ends first, the write in progress is cut off and what is left is counted as
-// dropped.
+// dropped for shutdown, as is any event recorded from here on.
 func (r *Recorder) Close(ctx context.Context) {
 	r.mu.Lock()
 	if !r.closed {

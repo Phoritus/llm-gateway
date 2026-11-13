@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"llm-gateway/internal/store"
+	"llm-gateway/internal/usage"
 )
 
 func (e *testEnv) writeUsage(workspaceID, route string, at time.Time, n int) {
@@ -61,6 +63,38 @@ func TestUsageShowsTheWorkspacesRollupAndRecentRequests(t *testing.T) {
 		"&to="+now.AddDate(0, 0, -300).Format("2006-01-02"), nil)
 	if past.status != http.StatusOK || len(list(past.body["days"])) != 0 {
 		t.Errorf("an empty range must be an empty list, got %d %s", past.status, past.raw)
+	}
+}
+
+// The recorder against the real store: an event the database refuses, here
+// one for a workspace that no longer exists, is dropped alone.
+func TestAnUnstorableEventDoesNotCostOtherWorkspacesTheirs(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	ws := env.workspaceOf("alice@example.com")
+	event := func(workspaceID string, promptTokens int) usage.Event {
+		return usage.Event{
+			WorkspaceID: workspaceID, KeyID: uuid.NewString(), RouteAlias: "chat", Vendor: "groq", Model: "llama",
+			Status: 200, Outcome: store.OutcomeOK, Attempts: 1, PromptTokens: promptTokens, CreatedAt: time.Now().UTC(),
+		}
+	}
+
+	rec := usage.NewRecorder(env.store, 100, nil)
+	rec.Record(event(ws, 10))
+	rec.Record(event(uuid.NewString(), 10))
+	rec.Record(event(ws, 3_000_000_000)) // past int32, as an upstream may report
+	go rec.Run(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rec.Close(ctx)
+
+	res := alice.do(http.MethodGet, "/api/usage", nil)
+	days := list(res.body["days"])
+	if len(days) != 1 || len(list(res.body["recent"])) != 2 {
+		t.Fatalf("alice's usage after a batch holding one unstorable event: %s", res.raw)
+	}
+	if d := days[0].(map[string]any); d["requests"] != float64(2) || d["prompt_tokens"] != float64(3_000_000_010) {
+		t.Errorf("rollup = %v, want 2 requests and 3000000010 prompt tokens", d)
 	}
 }
 
