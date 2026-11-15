@@ -13,8 +13,8 @@ const maxToolCalls = 128
 // Assembler builds a ChatResponse from a stream's chunks as they pass. It is
 // fed chunk by chunk rather than handed a Stream so that the same chunks can
 // go to a client at the same time: a non-streaming request assembles them
-// silently, and the exact cache will assemble a streaming one while it is
-// being sent.
+// silently, and the exact cache assembles a streaming one while it is being
+// sent.
 type Assembler struct {
 	resp    ChatResponse
 	choices []*choiceParts

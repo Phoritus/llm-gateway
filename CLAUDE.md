@@ -4,31 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-The skeleton, the control plane's authentication, and a mock-only data plane
-are implemented. Read a package's `doc.go` to learn what belongs in it before
+The skeleton, the control plane and the Phase 1 data plane are implemented. Read a package's `doc.go` to learn what belongs in it before
 adding files.
 
 | Package | State |
 | --- | --- |
-| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis. `store.Credentials` seals provider keys (AAD binds workspace, row and vendor; at most 50 per workspace). Routes and their targets, with composite foreign keys holding a target's credential to the route's workspace |
+| `config`, `store` | Built: env loading, pgx pool, goose migrations, Redis. `store.Credentials` seals provider keys (AAD binds workspace, row and vendor; at most 50 per workspace). Routes and their targets, with composite foreign keys holding a target's credential to the route's workspace; a route carries `free_first` and a `store.CacheMode` (`auto`, `always`, `off`), and `ResolveRoute` returns both with a `Version` taken from `updated_at`. `FreeQuotas` reads the seeded `free_quota_catalog` |
 | `telemetry` | Built: request id, redacting access log (with `trace_id`), OpenTelemetry setup over OTLP, bounded `http.route` labelling, `postgres.up`/`redis.up` gauges. `store` adds the pool gauges and `ratelimit` the `ratelimit.rejections` counter |
 | `auth` | Sessions, argon2id passwords, CSRF, email verification, password reset. `GatewayKeys`: minting (`gwk_` + 32 random bytes, SHA-256 stored) and `Authenticate` through a 1s in-process cache, with `last_used_at` flushed once a minute. `/v1` authenticates with it |
-| `api` | Auth endpoints, health probes, `GET/POST /api/credentials`, `DELETE /api/credentials/{id}` (last 4 characters only) and `POST /api/credentials/{id}/test`, `GET/POST /api/gateway-keys` and `DELETE /api/gateway-keys/{id}` (full key returned once, at creation; delete revokes), `GET/POST /api/routes` and `PUT/DELETE /api/routes/{id}` (PUT replaces the ordered target chain), `GET /api/usage?from=&to=&route=` |
-| `ratelimit` | Redis token bucket (`AllowN`, the auth endpoints, failing closed) and `Take`/`Settle`, several buckets spent all or nothing in one Lua call. `Local` is the same in process; `FailOpen` falls back to it when Redis errors and skips Redis for 5s after |
+| `api` | Auth endpoints, health probes, `GET/POST /api/credentials`, `DELETE /api/credentials/{id}` (last 4 characters only) and `POST /api/credentials/{id}/test`, `GET/POST /api/gateway-keys` and `DELETE /api/gateway-keys/{id}` (full key returned once, at creation; delete revokes), `GET/POST /api/routes` and `PUT/DELETE /api/routes/{id}` (PUT replaces the ordered target chain; `cache` is `auto`, `always` or `off`, `auto` when omitted), `GET /api/usage?from=&to=&route=` (each day carries `cache_hits`, each recent event `cached`) |
+| `ratelimit` | Redis token bucket (`AllowN`, the auth endpoints, failing closed) and `Take`/`Settle`, several buckets spent all or nothing in one Lua call. `Peek` reads the levels of several buckets without spending, creating or refreshing any. `Local` is the same in process; `FailOpen` falls back to it when Redis errors and skips Redis for 5s after |
 | `provider`, `provider/mock` | `Vendor`, the fixed set of upstreams a credential can name, including `mock`, which production refuses. The one-method `Provider` interface (`ChatStream` → pull `Stream`), the OpenAI wire types, typed errors, and an `Assembler` that builds a non-streaming response from chunks. The mock is scripted by model name: `mock/echo`, `slow`, `rate-limited`, `fail`, `context-too-long`, `break` |
-| `gateway` | `POST /v1/chat/completions`, streaming and not. Authenticates the bearer gateway key (and the owner's email verification), limits the request (failed authentications per IP, in-flight requests per workspace, requests and estimated tokens per minute per key and per workspace, reconciled against reported usage), resolves `model` to the workspace's route and fails over across its targets through `router`, setting `X-Fallback-Attempts` and `X-Fallback-Trail`. Records one usage event per request that resolved a route, and the `gateway.*` and `router.*` request metrics, labelled by vendor and outcome only. Mounted in production with the OpenAI-compatible and Anthropic adapters; the mock is registered outside production only |
+| `gateway` | `POST /v1/chat/completions`, streaming and not. Authenticates the bearer gateway key (and the owner's email verification), limits the request (failed authentications per IP, in-flight requests per workspace, requests and estimated tokens per minute per key and per workspace, reconciled against reported usage), resolves `model` to the workspace's route, answers a cacheable request from the exact cache when it holds the answer (`X-Cache: HIT`, zero attempts, the token reservation refunded, no free quota spent; `MISS` on a cacheable request that missed, no header otherwise), puts a free-first route's targets with free quota left first, and fails over across the targets through `router`, setting `X-Fallback-Attempts` and `X-Fallback-Trail`. A miss whose stream ran to its end is stored, detached. Records one usage event per request that resolved a route, and the `gateway.*` and `router.*` request metrics, labelled by vendor and outcome only (a hit's vendor label is `cache`), plus `gateway.cache` by `result`. Mounted in production with the OpenAI-compatible and Anthropic adapters; the mock is registered outside production only |
 | `crypto` | AES-256-GCM `Keyring`: `Seal`/`Open` with caller-supplied AAD, a key id derived from each key, older keys accepted for rotation. Used by `store.Credentials`, keyed by `config.MasterKey` |
 | `provider/openai`, `provider/sse` | One adapter per OpenAI-compatible vendor (OpenAI, Groq, Cerebras, OpenRouter, Mistral, Gemini), base URLs fixed in `openai.Endpoints`; a first-byte timer; status and error-body classification into the typed errors, Google's array-wrapped error shape included; `CheckKey` for the credential test. `sse` is the shared event-stream reader |
 | `provider/anthropic` | Translates OpenAI chat to the Messages API (`anthropic-version: 2026-10-21`) and its event stream back to OpenAI chunks. System and developer messages go to top-level `system`, tool messages become `tool_result` blocks, same-role turns merge; `temperature` and `top_p` are dropped. A request with no Anthropic equivalent (`n` > 1, `json_object`, an unknown content part) is refused locally as `ErrInvalidRequest` |
 | `router` | `Run` tries a route's targets in order, up to `MaxHops` and a 45s budget (the first retry always allowed), failing over only before the first chunk. The spec's skip table is `rules.go`: skips, a per-vendor breaker and a per-credential-and-model bench live in Redis with TTLs, read in one MGET with a 1s in-process copy, falling back to in-process state when Redis errors. Exhaustion reduces to one `*provider.Error`: rate limited if any target was, else the failure every attempt shared, else upstream |
 | `usage` | The write side of usage: `Recorder.Record` never blocks (a full queue drops its oldest event and counts it), `Run` writes batches through `store.WriteBatch`, one statement that inserts `usage_events` and adds the rows it actually inserted to the `usage_daily` rollup. Each event carries a UUID minted at `Record`, so a retried batch counts once. A batch that fails twice is written one event at a time, so one unstorable event costs only itself. `Close` flushes on shutdown, inside `SHUTDOWN_TIMEOUT`. Drops are counted by reason: `overflow`, `write_failed`, `shutdown`. `RunRetention` prunes raw events past `USAGE_RETENTION`; the rollup is kept. `GET /api/usage` is the read side, from the rollup plus the 50 latest events |
-| `cache` | Still a one-line `doc.go` |
+| `cache` | The exact cache. `Key` is `cache:{workspace}:{sha256}` over the route id, its `Version` and the request with `model`, `stream`, `stream_options` and `user` dropped and the rest re-encoded. `RequestCacheable` (the route's mode; never a request with tools, functions, or a tool message) and `ResponseCacheable` (every choice finished, no tool calls) are the only two places that decide. `Replay` turns a stored answer back into a `provider.Stream`. `Exact` is the Redis store: `CACHE_TTL`, at most 256 KiB an entry, a 250ms lookup. The semantic cache is Phase 2 |
+| `quota` | Free-first routing. `Catalog` holds `free_quota_catalog` in memory, keyed by vendor and model, reloaded every 10 minutes; a failed load keeps the previous one. `Tracker.Spend` counts an answer against its credential-and-model buckets (`free:rpm`, `free:rpd`, `free:tpm`, `free:tpd`; daily ones live 25h) and `Tracker.Prioritize` moves the targets with a catalog entry and room left to the front, keeping the route's order within each group. Exhausted free targets are demoted, never dropped |
 
-Build-order steps 1 to 3 are done: `/v1` authenticates gateway keys and
-resolves routes. **The work left is an ordered ticket list in
-`features-specs/roadmap/map.md`** -- read it at the start of a session and take
-the next unblocked ticket. Next is free-first routing and the exact cache (ticket 13). The step
-2 design is in `features-specs/mock-provider-v1/design.md`.
+Build-order steps 1 to 7 are done, which is the whole Phase 1 build order. **The work left is
+an ordered ticket list in `features-specs/roadmap/map.md`** -- read it at the
+start of a session and take the next unblocked ticket. The step 2 design is in
+`features-specs/mock-provider-v1/design.md`, and the free-first and exact cache
+design in `features-specs/free-first-and-cache/design.md`.
 
 The design is already settled and written down. `Backend Architecture BYOK LLM Gateway (Go).md` at the repo root is the authoritative spec — read it before any non-trivial change. It also exists as a live Claude Docs document at https://claude.ai/artifact/KiGTMPuYo84W15uVSzNM1j, which is read through the Claude Docs connector rather than WebFetch. The two can drift; prefer the local file for code decisions.
 
@@ -115,6 +115,22 @@ loader requires 32 bytes of base64 and refuses to run without it, by design.
 `make env-secrets` generates only that and `SESSION_SECRET`, leaving every
 other line of an existing `.env.dev` byte for byte — which matters when it
 holds real provider URLs and tokens.
+
+**The free quota counts are this gateway's, not the upstream's.** A key used
+from anywhere else, or a catalog row that has gone stale, makes them wrong, so
+`quota` only ever reorders: a free target that looks exhausted is tried after
+the others, and a free target that is really exhausted answers 429 and the
+router's skip rules take it from there. The catalog's seed rows were written
+from the vendors' published limits and not checked against live keys;
+correcting one is an `UPDATE free_quota_catalog`, picked up within 10 minutes.
+
+**A cache hit is recorded under the vendor that produced the stored answer,
+but measured under `cache`.** The usage event keeps the real vendor and model
+with `cached = true` and zero tokens, so history shows where the answer came
+from; the metrics use the vendor label `cache`, so a hit's near-zero time to
+first token does not pull a real vendor's histogram down. The cache key
+includes the route's `updated_at`, so any PUT on a route, even one that
+changes nothing, stops its stored answers being served.
 
 **Rate limits are keyed on the client address, so `TRUSTED_PROXIES` is a
 security setting.** `X-Forwarded-For` is believed only when the request's TCP
@@ -255,7 +271,7 @@ Most free providers already speak OpenAI format, so `provider/openai` with a con
 
 ## Configuration
 
-Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `.env.dev` holds the local secrets and is gitignored. The scripts read it for local work (`ENV_FILE=<file>` picks another) and refuse `ENV_FILE=.env.prod` by name, so no `make` target can open the production file.
+Environment variables only — see `.env.example`. The service must refuse to start when `MASTER_KEY` is absent. `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` gate Phase 2 features and default off. `CACHE_TTL` (default 1h) is how long the exact cache keeps an answer, and 0 turns it off. `.env.dev` holds the local secrets and is gitignored. The scripts read it for local work (`ENV_FILE=<file>` picks another) and refuse `ENV_FILE=.env.prod` by name, so no `make` target can open the production file.
 
 ## Phasing
 

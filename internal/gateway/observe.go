@@ -18,9 +18,9 @@ import (
 const statusClientClosed = 499
 
 // The labels below come from fixed sets only: a vendor is one of
-// provider.Vendor, noVendor or vendorCache, an outcome is a store.Outcome constant. Never the route
-// alias, the workspace or the key: each of those is a new metric series per
-// tenant.
+// provider.Vendor, noVendor or vendorCache, and an outcome is a store.Outcome
+// constant. Never the route alias, the workspace or the key: each of those is
+// a new metric series per tenant.
 const (
 	noVendor                     = "none"
 	outcomeRefused store.Outcome = "refused"
