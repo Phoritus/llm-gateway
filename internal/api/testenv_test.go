@@ -24,6 +24,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/cache"
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
@@ -222,6 +223,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		Router:  router.New(router.NewMemory(), deps.Logger),
 		Usage:   usageRecorder,
 		Timeout: time.Minute,
+		// Its keys carry the workspace's id, which is new in every test, so
+		// nothing has to be deleted between them.
+		Cache:   cache.NewExact(rdb, time.Minute),
 		Limiter: ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
 		Limits: gateway.Limits{
 			KeyRequests:          ratelimit.PerMinute(120),

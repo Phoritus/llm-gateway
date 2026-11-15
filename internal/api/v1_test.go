@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"llm-gateway/internal/config"
 )
@@ -100,5 +101,99 @@ func TestProductionRefusesMockCredentials(t *testing.T) {
 	}
 	if strings.Contains(res.raw, "mock") {
 		t.Fatalf("the refusal offers mock as a choice: %s", res.raw)
+	}
+}
+
+// cachedChat sends a temperature-0 request and returns its X-Cache header.
+func (e *testEnv) cachedChat(key, model string) string {
+	e.t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"model":       model,
+		"temperature": 0,
+		"messages":    []map[string]string{{"role": "user", "content": "hello through the gateway"}},
+	})
+	req, _ := http.NewRequest(http.MethodPost, e.server.URL+"/v1/chat/completions", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "hello through the gateway") {
+		e.t.Fatalf("chat: %d %s", resp.StatusCode, raw)
+	}
+	return resp.Header.Get("X-Cache")
+}
+
+// The exact cache against real Redis and a real route: the stored answer is
+// found by the next request, and a PUT on the route, which changes nothing
+// but updated_at here, stops it being served.
+func TestV1AnswersARepeatFromTheCacheUntilTheRouteIsRewritten(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	key := env.mockRoute(alice, "team-chat")
+
+	if got := env.cachedChat(key, "team-chat"); got != "MISS" {
+		t.Fatalf("first request: X-Cache = %q, want MISS", got)
+	}
+	// The answer is stored after the response, so the hit is waited for.
+	hit := func() bool {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if env.cachedChat(key, "team-chat") == "HIT" {
+				return true
+			}
+		}
+		return false
+	}
+	if !hit() {
+		t.Fatal("a repeated request was never answered from the cache")
+	}
+
+	routes := alice.do(http.MethodGet, "/api/routes", nil)
+	route := list(routes.body["data"])[0].(map[string]any)
+	id, _ := route["id"].(string)
+	rewrite := map[string]any{"alias": "team-chat", "targets": route["targets"]}
+	if res := alice.do(http.MethodPut, "/api/routes/"+id, rewrite); res.status != http.StatusOK {
+		t.Fatalf("put: %d %s", res.status, res.raw)
+	}
+	if got := env.cachedChat(key, "team-chat"); got != "MISS" {
+		t.Fatalf("after the route was rewritten: X-Cache = %q, want MISS", got)
+	}
+
+	off := map[string]any{"alias": "team-chat", "targets": route["targets"], "cache": "off"}
+	if res := alice.do(http.MethodPut, "/api/routes/"+id, off); res.status != http.StatusOK {
+		t.Fatalf("put: %d %s", res.status, res.raw)
+	}
+	if got := env.cachedChat(key, "team-chat"); got != "" {
+		t.Fatalf("with the route's cache off: X-Cache = %q, want none", got)
+	}
+
+	// The hits reach the dashboard: counted in the day's row, flagged on the
+	// event, and carrying no tokens.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		usage := alice.do(http.MethodGet, "/api/usage", nil)
+		var hits float64
+		for _, d := range list(usage.body["days"]) {
+			n, _ := d.(map[string]any)["cache_hits"].(float64)
+			hits += n
+		}
+		flagged := false
+		for _, e := range list(usage.body["recent"]) {
+			event := e.(map[string]any)
+			if event["cached"] == true {
+				flagged = true
+				if event["prompt_tokens"] != float64(0) || event["vendor"] != "mock" || event["attempts"] != float64(0) {
+					t.Fatalf("a cache hit was recorded as %v", event)
+				}
+			}
+		}
+		if hits >= 1 && flagged {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the cache hits never reached /api/usage: %s", usage.raw)
+		}
 	}
 }
