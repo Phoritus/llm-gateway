@@ -84,7 +84,8 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// The limits come before the route is resolved: resolving it is a
 	// Postgres query, and a key past its limit should not get to make one.
-	reserved, ok := d.reserve(w, r, key, estimateTokens(bodyBytes))
+	estimate := estimateTokens(bodyBytes)
+	reserved, ok := d.reserve(w, r, key, estimate)
 	if !ok {
 		return
 	}
@@ -127,6 +128,9 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if cached.key != "" {
 			w.Header().Set("X-Cache", "MISS")
 		}
+		if route.FreeFirst && d.Quota != nil {
+			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
+		}
 		res, err := d.Router.Run(ctx, route, d.attempt(req))
 		obs.attempts = res.Attempts()
 		if err != nil && clientGone(ctx) {
@@ -140,6 +144,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stream, first, obs.target = res.Stream, res.First, res.Target
+		defer func() { d.spendFree(ctx, res.Target, &cost, estimate) }()
 	}
 	defer stream.Close()
 	charged.observe(first)

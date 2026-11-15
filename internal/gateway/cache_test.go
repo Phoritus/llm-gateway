@@ -84,11 +84,12 @@ func (m *memoryCache) staysEmpty(t *testing.T) {
 	}
 }
 
-// cachingRoutes is fakeRoutes with a cache mode, and a version a test can
-// bump the way a PUT on the route does.
+// cachingRoutes is fakeRoutes with a route's settings: a cache mode,
+// free-first, and a version a test can bump the way a PUT on the route does.
 type cachingRoutes struct {
-	mode    store.CacheMode
-	version atomic.Int64
+	mode      store.CacheMode
+	freeFirst bool
+	version   atomic.Int64
 }
 
 func (c *cachingRoutes) ResolveRoute(ctx context.Context, workspaceID, alias string) (*store.ResolvedRoute, error) {
@@ -96,7 +97,7 @@ func (c *cachingRoutes) ResolveRoute(ctx context.Context, workspaceID, alias str
 	if err != nil {
 		return nil, err
 	}
-	route.Cache, route.Version = c.mode, c.version.Load()
+	route.Cache, route.FreeFirst, route.Version = c.mode, c.freeFirst, c.version.Load()
 	return route, nil
 }
 
