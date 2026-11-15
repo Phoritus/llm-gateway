@@ -30,6 +30,7 @@ type routeView struct {
 	ID        string            `json:"id"`
 	Alias     string            `json:"alias"`
 	FreeFirst bool              `json:"free_first"`
+	Cache     store.CacheMode   `json:"cache"`
 	MaxHops   int               `json:"max_hops"`
 	Targets   []routeTargetView `json:"targets"`
 	CreatedAt time.Time         `json:"created_at"`
@@ -41,7 +42,7 @@ func routeViewOf(r store.Route) routeView {
 	for i, t := range r.Targets {
 		targets[i] = routeTargetView(t)
 	}
-	return routeView{ID: r.ID, Alias: r.Alias, FreeFirst: r.FreeFirst, MaxHops: r.MaxHops,
+	return routeView{ID: r.ID, Alias: r.Alias, FreeFirst: r.FreeFirst, Cache: r.Cache, MaxHops: r.MaxHops,
 		Targets: targets, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 }
 
@@ -115,6 +116,7 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 	var req struct {
 		Alias     string            `json:"alias"`
 		FreeFirst bool              `json:"free_first"`
+		Cache     *string           `json:"cache"`
 		MaxHops   *int              `json:"max_hops"`
 		Targets   []routeTargetView `json:"targets"`
 	}
@@ -125,6 +127,14 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 	if !validAlias(req.Alias) {
 		invalidField(w, "alias", "alias must be "+aliasRule+".")
 		return store.RouteSpec{}, false
+	}
+	mode := store.CacheAuto
+	if req.Cache != nil {
+		var ok bool
+		if mode, ok = store.ParseCacheMode(*req.Cache); !ok {
+			invalidField(w, "cache", "cache must be auto, always or off.")
+			return store.RouteSpec{}, false
+		}
 	}
 	hops := defaultMaxHops
 	if req.MaxHops != nil {
@@ -159,7 +169,7 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 		seen[target] = true
 		targets[i] = target
 	}
-	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, MaxHops: hops, Targets: targets}, true
+	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, Cache: mode, MaxHops: hops, Targets: targets}, true
 }
 
 // aliasRule is validAlias in words, for the error that refuses one.

@@ -38,6 +38,9 @@ func TestRoutesCRUD(t *testing.T) {
 	if created.status != http.StatusCreated {
 		t.Fatalf("create: %d %s", created.status, created.raw)
 	}
+	if created.body["cache"] != "auto" {
+		t.Fatalf("a route created without cache must default to auto: %s", created.raw)
+	}
 	if created.body["max_hops"] != float64(3) || created.body["free_first"] != false {
 		t.Fatalf("defaults: %s", created.raw)
 	}
@@ -55,9 +58,10 @@ func TestRoutesCRUD(t *testing.T) {
 	}
 
 	update := routeBody("renamed", target(cred, "llama-3.1-8b"))
-	update["max_hops"], update["free_first"] = 5, true
+	update["max_hops"], update["free_first"], update["cache"] = 5, true, "always"
 	put := alice.do(http.MethodPut, "/api/routes/"+id, update)
-	if put.status != http.StatusOK || put.body["alias"] != "renamed" || put.body["max_hops"] != float64(5) {
+	if put.status != http.StatusOK || put.body["alias"] != "renamed" || put.body["max_hops"] != float64(5) ||
+		put.body["cache"] != "always" {
 		t.Fatalf("put: %d %s", put.status, put.raw)
 	}
 	list = alice.do(http.MethodGet, "/api/routes", nil)
@@ -66,8 +70,9 @@ func TestRoutesCRUD(t *testing.T) {
 	}
 
 	reset := alice.do(http.MethodPut, "/api/routes/"+id, routeBody("renamed", target(cred, "m")))
-	if reset.status != http.StatusOK || reset.body["max_hops"] != float64(3) || reset.body["free_first"] != false {
-		t.Fatalf("put without max_hops or free_first must reset them: %d %s", reset.status, reset.raw)
+	if reset.status != http.StatusOK || reset.body["max_hops"] != float64(3) || reset.body["free_first"] != false ||
+		reset.body["cache"] != "auto" {
+		t.Fatalf("put without max_hops, free_first or cache must reset them: %d %s", reset.status, reset.raw)
 	}
 
 	if res := alice.do(http.MethodDelete, "/api/routes/"+id, nil); res.status != http.StatusNoContent {
@@ -169,6 +174,11 @@ func TestRouteValidation(t *testing.T) {
 		b["max_hops"] = n
 		return b
 	}
+	withCache := func(mode any) map[string]any {
+		b := routeBody("chat", good)
+		b["cache"] = mode
+		return b
+	}
 	tooMany := make([]map[string]any, 11)
 	for i := range tooMany {
 		tooMany[i] = target(cred, "m"+strings.Repeat("x", i))
@@ -184,6 +194,9 @@ func TestRouteValidation(t *testing.T) {
 		{"long alias", "alias", routeBody(strings.Repeat("a", 65), good)},
 		{"zero hops", "max_hops", withHops(0)},
 		{"too many hops", "max_hops", withHops(11)},
+		{"unknown cache mode", "cache", withCache("sometimes")},
+		{"cache mode in capitals", "cache", withCache("Always")},
+		{"empty cache mode", "cache", withCache("")},
 		{"no targets", "targets", routeBody("chat")},
 		{"too many targets", "targets", routeBody("chat", tooMany...)},
 		{"bad credential id", "targets", routeBody("chat", target("nope", "m"))},

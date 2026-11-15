@@ -215,7 +215,7 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, Targets: []RouteTarget{
+	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, FreeFirst: true, Cache: CacheAlways, Targets: []RouteTarget{
 		{CredentialID: second.ID, Model: "echo"},
 		{CredentialID: first.ID, Model: "llama-3"},
 	}}); err != nil {
@@ -229,6 +229,9 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 	want := []ResolvedTarget{
 		{CredentialID: second.ID, Vendor: provider.VendorMock, Model: "echo", Secret: "sk-second-secret-0000"},
 		{CredentialID: first.ID, Vendor: provider.VendorGroq, Model: "llama-3", Secret: testSecret},
+	}
+	if !route.FreeFirst || route.Cache != CacheAlways || route.Version == 0 {
+		t.Fatalf("route settings = free_first %v cache %q version %d", route.FreeFirst, route.Cache, route.Version)
 	}
 	if route.MaxHops != 3 || len(route.Targets) != 2 || route.Targets[0] != want[0] || route.Targets[1] != want[1] {
 		t.Fatalf("route = %+v, want %+v", route, want)

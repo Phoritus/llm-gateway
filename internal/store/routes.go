@@ -26,11 +26,32 @@ var (
 	ErrCredentialInUse = errors.New("store: credential is used by a route")
 )
 
+// CacheMode is a route's exact-cache policy.
+type CacheMode string
+
+const (
+	// CacheAuto caches only a request whose temperature is exactly 0.
+	CacheAuto CacheMode = "auto"
+	// CacheAlways caches every cacheable request on the route.
+	CacheAlways CacheMode = "always"
+	CacheOff    CacheMode = "off"
+)
+
+// ParseCacheMode accepts only the exact lowercase name.
+func ParseCacheMode(s string) (CacheMode, bool) {
+	switch m := CacheMode(s); m {
+	case CacheAuto, CacheAlways, CacheOff:
+		return m, true
+	}
+	return "", false
+}
+
 type Route struct {
 	ID          string
 	WorkspaceID string
 	Alias       string
 	FreeFirst   bool
+	Cache       CacheMode
 	MaxHops     int
 	Targets     []RouteTarget
 	CreatedAt   time.Time
@@ -47,15 +68,16 @@ type RouteTarget struct {
 type RouteSpec struct {
 	Alias     string
 	FreeFirst bool
+	Cache     CacheMode
 	MaxHops   int
 	Targets   []RouteTarget
 }
 
-const routeColumns = `id, workspace_id, alias, free_first, max_hops, created_at, updated_at`
+const routeColumns = `id, workspace_id, alias, free_first, cache, max_hops, created_at, updated_at`
 
 func scanRoute(row pgx.Row) (Route, error) {
 	var r Route
-	err := row.Scan(&r.ID, &r.WorkspaceID, &r.Alias, &r.FreeFirst, &r.MaxHops, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.WorkspaceID, &r.Alias, &r.FreeFirst, &r.Cache, &r.MaxHops, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -91,11 +113,11 @@ func (s *Store) CreateRoute(ctx context.Context, workspaceID string, in RouteSpe
 	}
 
 	r, err := scanRoute(tx.QueryRow(ctx,
-		`INSERT INTO routes (id, workspace_id, alias, free_first, max_hops)
-		 SELECT $1, $2, $3, $4, $5
-		  WHERE (SELECT count(*) FROM routes WHERE workspace_id = $2) < $6
+		`INSERT INTO routes (id, workspace_id, alias, free_first, cache, max_hops)
+		 SELECT $1, $2, $3, $4, $5, $6
+		  WHERE (SELECT count(*) FROM routes WHERE workspace_id = $2) < $7
 		 RETURNING `+routeColumns,
-		uuid.NewString(), workspaceID, in.Alias, in.FreeFirst, in.MaxHops, maxRoutesPerWorkspace))
+		uuid.NewString(), workspaceID, in.Alias, in.FreeFirst, in.Cache, in.MaxHops, maxRoutesPerWorkspace))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrLimitReached
@@ -134,10 +156,10 @@ func (s *Store) UpdateRoute(ctx context.Context, workspaceID, id string, in Rout
 	}
 
 	r, err := scanRoute(tx.QueryRow(ctx,
-		`UPDATE routes SET alias = $3, free_first = $4, max_hops = $5, updated_at = now()
+		`UPDATE routes SET alias = $3, free_first = $4, cache = $5, max_hops = $6, updated_at = now()
 		  WHERE workspace_id = $1 AND id = $2
 		 RETURNING `+routeColumns,
-		workspaceID, id, in.Alias, in.FreeFirst, in.MaxHops))
+		workspaceID, id, in.Alias, in.FreeFirst, in.Cache, in.MaxHops))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrNotFound

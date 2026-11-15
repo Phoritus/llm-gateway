@@ -79,6 +79,38 @@ func TestWriteBatchRollsUpWhatItStored(t *testing.T) {
 	}
 }
 
+func TestTheRollupCountsCacheHits(t *testing.T) {
+	st := newTestStore(t)
+	ws := signup(t, st, "alice@example.com").WorkspaceID
+	noon := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	hit := func(e *UsageEvent) { e.Cached, e.PromptTokens, e.CompletionTokens = true, 0, 0 }
+
+	writeUsage(t, st, usageEvent(ws, "chat", noon), usageEvent(ws, "chat", noon.Add(time.Minute), hit))
+	writeUsage(t, st, usageEvent(ws, "chat", noon.Add(2*time.Minute), hit))
+
+	days := dailyOf(t, st, ws, "chat")
+	if len(days) != 1 || days[0].Requests != 3 || days[0].CacheHits != 2 || days[0].PromptTokens != 10 {
+		t.Fatalf("rollup = %+v, want 3 requests of which 2 cache hits, and one request's tokens", days)
+	}
+}
+
+func TestTheFreeQuotaCatalogIsSeeded(t *testing.T) {
+	st := newTestStore(t)
+	quotas, err := st.FreeQuotas(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range quotas {
+		if q.Vendor == "groq" && q.Model == "llama-3.3-70b-versatile" {
+			if q.RPM == nil || *q.RPM <= 0 || q.TPD == nil {
+				t.Errorf("groq row = %+v, want its limits read", q)
+			}
+			return
+		}
+	}
+	t.Fatalf("catalog = %+v, want the seeded groq row", quotas)
+}
+
 func TestBatchesAddUp(t *testing.T) {
 	st := newTestStore(t)
 	ws := signup(t, st, "alice@example.com").WorkspaceID
