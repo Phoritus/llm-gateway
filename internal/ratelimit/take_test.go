@@ -294,6 +294,14 @@ func (f *flaky) Settle(ctx context.Context, buckets []Bucket) error {
 	return f.Local.Settle(ctx, buckets)
 }
 
+func (f *flaky) Peek(ctx context.Context, buckets []Bucket) ([]float64, error) {
+	f.calls.Add(1)
+	if f.failing.Load() {
+		return nil, errPrimaryDown
+	}
+	return f.Local.Peek(ctx, buckets)
+}
+
 func newFailOpen() (*FailOpen, *flaky) {
 	primary := &flaky{Local: NewLocal()}
 	return &FailOpen{

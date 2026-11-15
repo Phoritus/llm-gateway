@@ -11,8 +11,8 @@ import (
 // their TTL. Redis expires its keys itself; here a call does it on the way in.
 const localSweepEvery = time.Minute
 
-// Local is an in-process limiter with the semantics of Limiter's Take and
-// Settle. It is what the data plane falls back to when Redis is unreachable,
+// Local is an in-process limiter with the semantics of Limiter's Take, Settle
+// and Peek. It is what the data plane falls back to when Redis is unreachable,
 // and it is per instance: two instances each hand out a full allowance.
 type Local struct {
 	mu        sync.Mutex
@@ -52,6 +52,33 @@ func (l *Local) Settle(_ context.Context, buckets []Bucket) error {
 	return nil
 }
 
+// Peek is Limiter.Peek against this process's buckets. A bucket past its TTL
+// reads as full, as its expired key would in Redis.
+func (l *Local) Peek(_ context.Context, buckets []Bucket) ([]float64, error) {
+	if err := checkRules(buckets); err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	levels := make([]float64, len(buckets))
+	for i, b := range buckets {
+		levels[i] = l.level(b, now)
+	}
+	return levels, nil
+}
+
+// level is what a bucket holds at now, after its refill.
+func (l *Local) level(b Bucket, now time.Time) float64 {
+	state, ok := l.buckets[localKey{b.Scope, b.ID}]
+	if !ok || !now.Before(state.expires) {
+		return b.Rule.Burst
+	}
+	elapsed := max(0, now.Sub(state.at).Seconds())
+	return min(b.Rule.Burst, state.tokens+elapsed*b.Rule.Refill)
+}
+
 // run mirrors take.lua step for step; the tests hold the two to one table.
 func (l *Local) run(buckets []Bucket, force bool) (Result, []bool) {
 	l.mu.Lock()
@@ -63,11 +90,7 @@ func (l *Local) run(buckets []Bucket, force bool) (Result, []bool) {
 	res := Result{Allowed: true, Remaining: make([]float64, len(buckets))}
 	refused := make([]bool, len(buckets))
 	for i, b := range buckets {
-		have := b.Rule.Burst
-		if state, ok := l.buckets[localKey{b.Scope, b.ID}]; ok {
-			elapsed := max(0, now.Sub(state.at).Seconds())
-			have = min(b.Rule.Burst, state.tokens+elapsed*b.Rule.Refill)
-		}
+		have := l.level(b, now)
 		res.Remaining[i] = have
 		if cost := b.spend(force); !force && have < cost {
 			res.Allowed, refused[i] = false, true

@@ -16,10 +16,11 @@ const (
 	primaryCoolOff = 5 * time.Second
 )
 
-// takeSettler is the pair of operations FailOpen forwards.
+// takeSettler is the set of operations FailOpen forwards.
 type takeSettler interface {
 	Take(ctx context.Context, buckets []Bucket) (Result, error)
 	Settle(ctx context.Context, buckets []Bucket) error
+	Peek(ctx context.Context, buckets []Bucket) ([]float64, error)
 }
 
 // FailOpen limits through the primary and, while that is failing, through the
@@ -59,6 +60,15 @@ func (f *FailOpen) Settle(ctx context.Context, buckets []Bucket) error {
 	return f.do(ctx, func(ctx context.Context, l takeSettler) error {
 		return l.Settle(ctx, buckets)
 	})
+}
+
+func (f *FailOpen) Peek(ctx context.Context, buckets []Bucket) ([]float64, error) {
+	var levels []float64
+	err := f.do(ctx, func(ctx context.Context, l takeSettler) (err error) {
+		levels, err = l.Peek(ctx, buckets)
+		return err
+	})
+	return levels, err
 }
 
 func (f *FailOpen) do(ctx context.Context, call func(context.Context, takeSettler) error) error {
