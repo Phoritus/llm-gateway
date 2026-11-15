@@ -18,7 +18,7 @@ import (
 const statusClientClosed = 499
 
 // The labels below come from fixed sets only: a vendor is one of
-// provider.Vendor, an outcome is a store.Outcome constant. Never the route
+// provider.Vendor, noVendor or vendorCache, an outcome is a store.Outcome constant. Never the route
 // alias, the workspace or the key: each of those is a new metric series per
 // tenant.
 const (
@@ -56,7 +56,10 @@ type observation struct {
 	attempts int
 	// answered is set when a target produced a first chunk, and target and
 	// firstChunk are then valid.
-	answered   bool
+	answered bool
+	// cached is set when the exact cache answered. target is then the target
+	// that produced the stored answer, and no target was called.
+	cached     bool
 	target     store.ResolvedTarget
 	firstChunk time.Time
 	// status is what the client was told, and outcome the fixed name of how
@@ -71,6 +74,9 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 	vendor, outcome := noVendor, o.outcome
 	if o.answered {
 		vendor = string(o.target.Vendor)
+	}
+	if o.cached {
+		vendor = vendorCache
 	}
 	if !o.routed {
 		outcome = outcomeRefused
@@ -95,7 +101,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 		WorkspaceID: key.WorkspaceID, KeyID: key.ID, RouteAlias: o.alias,
 		Status: o.status, Outcome: outcome, Attempts: o.attempts,
 		LatencyMs: int(elapsed.Milliseconds()), TTFTMs: int(ttft.Milliseconds()),
-		CreatedAt: o.start,
+		Cached: o.cached, CreatedAt: o.start,
 	}
 	if o.answered {
 		e.Vendor, e.Model = string(o.target.Vendor), o.target.Model

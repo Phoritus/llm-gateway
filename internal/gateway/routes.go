@@ -35,6 +35,9 @@ type Deps struct {
 	// required: there is no unlimited mode to fall into by leaving one out.
 	Limiter RateLimiter
 	Limits  Limits
+	// Cache answers a repeated request without an upstream call. Nil turns
+	// the exact cache off.
+	Cache ResponseCache
 	// ClientKey names the client's address for the limit on failed
 	// authentications. It must be something the client cannot choose.
 	ClientKey func(*http.Request) string
