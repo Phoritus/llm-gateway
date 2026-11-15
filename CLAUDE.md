@@ -120,9 +120,11 @@ holds real provider URLs and tokens.
 from anywhere else, or a catalog row that has gone stale, makes them wrong, so
 `quota` only ever reorders: a free target that looks exhausted is tried after
 the others, and a free target that is really exhausted answers 429 and the
-router's skip rules take it from there. The catalog's seed rows were written
-from the vendors' published limits and not checked against live keys;
-correcting one is an `UPDATE free_quota_catalog`, picked up within 10 minutes.
+router's skip rules take it from there. The catalog's seed rows were checked
+with free keys on 2026-11-15 (Groq, Gemini, OpenRouter) and hold only what a
+vendor reports, so most limits are null. Vendors rename and retire free models
+often: every model the first seed named was gone within weeks. Correcting a row
+is an `UPDATE free_quota_catalog`, picked up within 10 minutes.
 
 **A cache hit is recorded under the vendor that produced the stored answer,
 but measured under `cache`.** The usage event keeps the real vendor and model

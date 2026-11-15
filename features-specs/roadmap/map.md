@@ -235,9 +235,11 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   per-credential-and-model buckets go first, the rest keep the user's order
   behind, because the counts are this gateway's view and the router's skip
   rules handle a real 429. Every answered request spends its target's free
-  buckets, whatever the route. The catalog seed is unverified against live
-  keys, and OpenRouter's and Mistral's limits are account-wide, so several
-  such models on one key are over-counted as free.
+  buckets, whatever the route. The catalog seed was checked with free keys
+  for Groq, Gemini and OpenRouter and holds only reported limits (null
+  otherwise); Cerebras is unchecked and Mistral is now paid-only, so neither
+  has rows. OpenRouter's 50 free requests a day are account-wide, so several
+  `:free` models on one key are over-counted as free.
 
 ## Fog
 

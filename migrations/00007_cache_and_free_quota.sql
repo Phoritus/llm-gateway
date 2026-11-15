@@ -10,8 +10,8 @@ ALTER TABLE routes ADD COLUMN cache text NOT NULL DEFAULT 'auto' CHECK (cache IN
 ALTER TABLE usage_daily ADD COLUMN cache_hits bigint NOT NULL DEFAULT 0;
 
 -- What a vendor's free tier allows one key on one model. A null limit is one
--- the vendor does not publish. The rows are data the upstream changes, so
--- correcting one is an UPDATE here, not a release.
+-- the vendor does not report to a request made with a free key. The rows are
+-- data the upstream changes, so correcting one is an UPDATE, not a release.
 CREATE TABLE free_quota_catalog (
     vendor text    NOT NULL,
     model  text    NOT NULL,
@@ -22,21 +22,17 @@ CREATE TABLE free_quota_catalog (
     PRIMARY KEY (vendor, model)
 );
 
--- As published by each vendor at the time of writing, and not verified
--- against live keys. Where a vendor counts a limit across the whole account
--- rather than per model (OpenRouter's :free models, Mistral's free plan), the
--- row is that account-wide figure, so several such models on one key are
--- over-counted as free.
+-- Groq's response headers give requests a day and tokens a minute only.
+-- Gemini's OpenAI-compatible endpoint reports no limits. OpenRouter's 50
+-- requests a day (GET /api/v1/key, free_model_daily_requests) count across
+-- every :free model on the account.
 INSERT INTO free_quota_catalog (vendor, model, rpm, rpd, tpm, tpd) VALUES
-    ('groq',       'llama-3.3-70b-versatile',                 30,  1000,   12000,  100000),
-    ('groq',       'llama-3.1-8b-instant',                    30, 14400,    6000,  500000),
-    ('cerebras',   'llama-3.3-70b',                           30, 14400,   60000, 1000000),
-    ('cerebras',   'llama3.1-8b',                             30, 14400,   60000, 1000000),
-    ('gemini',     'gemini-2.5-flash',                        10,   250,  250000,    NULL),
-    ('gemini',     'gemini-2.5-flash-lite',                   15,  1000,  250000,    NULL),
-    ('openrouter', 'meta-llama/llama-3.3-70b-instruct:free',  20,    50,    NULL,    NULL),
-    -- Mistral publishes one request a second, written here as 60 a minute.
-    ('mistral',    'mistral-small-latest',                    60,  NULL,  500000,    NULL);
+    ('groq',       'openai/gpt-oss-120b',                 NULL, 1000, 8000, NULL),
+    ('groq',       'openai/gpt-oss-20b',                  NULL, 1000, 8000, NULL),
+    ('groq',       'qwen/qwen3.8-27b',                    NULL, 1000, 8000, NULL),
+    ('gemini',     'gemini-3.5-flash-lite',               NULL, NULL, NULL, NULL),
+    ('openrouter', 'google/gemma-4-31b-it:free',          NULL,   50, NULL, NULL),
+    ('openrouter', 'nvidia/nemotron-3.5-lightning:free',  NULL,   50, NULL, NULL);
 
 -- +goose StatementEnd
 

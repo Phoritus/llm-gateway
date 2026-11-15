@@ -101,8 +101,8 @@ func TestTheFreeQuotaCatalogIsSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, q := range quotas {
-		if q.Vendor == "groq" && q.Model == "llama-3.3-70b-versatile" {
-			if q.RPM == nil || *q.RPM <= 0 || q.TPD == nil {
+		if q.Vendor == "groq" && q.Model == "openai/gpt-oss-120b" {
+			if q.RPD == nil || *q.RPD <= 0 || q.TPM == nil || q.RPM != nil {
 				t.Errorf("groq row = %+v, want its limits read", q)
 			}
 			return

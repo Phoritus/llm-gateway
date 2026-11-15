@@ -20,7 +20,7 @@ import (
 )
 
 // Limits is one free tier: requests and tokens, per minute and per day. A nil
-// limit is one the vendor does not publish, and is not counted.
+// limit is one the vendor does not report, and is not counted.
 type Limits struct {
 	RPM, RPD, TPM, TPD *int
 }
