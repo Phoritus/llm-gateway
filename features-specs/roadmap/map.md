@@ -48,6 +48,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
+| [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `ready-for-agent` | 13 |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
