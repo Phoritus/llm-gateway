@@ -20,9 +20,11 @@ import (
 )
 
 // Limits is one free tier: requests and tokens, per minute and per day. A nil
-// limit is one the vendor does not report, and is not counted.
+// limit is one the vendor does not report, and is not counted. PerAccount
+// limits are the credential's across all its per-account models.
 type Limits struct {
 	RPM, RPD, TPM, TPD *int
+	PerAccount         bool
 }
 
 type entry struct {
@@ -50,7 +52,7 @@ func (c *Catalog) Load(ctx context.Context, src Source) error {
 	}
 	entries := make(map[entry]Limits, len(rows))
 	for _, r := range rows {
-		entries[entry{provider.Vendor(r.Vendor), r.Model}] = Limits{RPM: r.RPM, RPD: r.RPD, TPM: r.TPM, TPD: r.TPD}
+		entries[entry{provider.Vendor(r.Vendor), r.Model}] = Limits{RPM: r.RPM, RPD: r.RPD, TPM: r.TPM, TPD: r.TPD, PerAccount: r.PerAccount}
 	}
 	c.entries.Store(&entries)
 	return nil
@@ -105,10 +107,11 @@ var windows = []struct {
 	{"free:tpd", func(l Limits) *int { return l.TPD }, perDay, true},
 }
 
-// buckets is one bucket per limit the tier publishes, costed for one request
-// of the given tokens. The quota is the credential's on that model, whichever
-// route spends it.
 func buckets(t store.ResolvedTarget, l Limits, tokens float64) []ratelimit.Bucket {
+	id := t.CredentialID + ":" + t.Model
+	if l.PerAccount {
+		id = t.CredentialID
+	}
 	var out []ratelimit.Bucket
 	for _, w := range windows {
 		n := w.limit(l)
@@ -120,7 +123,7 @@ func buckets(t store.ResolvedTarget, l Limits, tokens float64) []ratelimit.Bucke
 			cost = tokens
 		}
 		out = append(out, ratelimit.Bucket{
-			Scope: w.scope, ID: t.CredentialID + ":" + t.Model, Rule: w.rule(float64(*n)), Cost: cost,
+			Scope: w.scope, ID: id, Rule: w.rule(float64(*n)), Cost: cost,
 		})
 	}
 	return out

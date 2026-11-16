@@ -100,15 +100,24 @@ func TestTheFreeQuotaCatalogIsSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var groq, openrouter bool
 	for _, q := range quotas {
-		if q.Vendor == "groq" && q.Model == "openai/gpt-oss-120b" {
-			if q.RPD == nil || *q.RPD <= 0 || q.TPM == nil || q.RPM != nil {
-				t.Errorf("groq row = %+v, want its limits read", q)
+		switch {
+		case q.Vendor == "groq" && q.Model == "openai/gpt-oss-120b":
+			groq = true
+			if q.RPD == nil || *q.RPD <= 0 || q.TPM == nil || q.RPM != nil || q.PerAccount {
+				t.Errorf("groq row = %+v, want its per-model limits read", q)
 			}
-			return
+		case q.Vendor == "openrouter":
+			openrouter = true
+			if !q.PerAccount {
+				t.Errorf("openrouter row = %+v, want its limit counted per account", q)
+			}
 		}
 	}
-	t.Fatalf("catalog = %+v, want the seeded groq row", quotas)
+	if !groq || !openrouter {
+		t.Fatalf("catalog = %+v, want the seeded groq and openrouter rows", quotas)
+	}
 }
 
 func TestBatchesAddUp(t *testing.T) {

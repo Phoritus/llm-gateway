@@ -1,6 +1,6 @@
 # 22 Free-tier limits that are counted per account
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 13
 
 `free_quota_catalog` is keyed by `(vendor, model)` and `quota` keeps one set of
@@ -15,3 +15,10 @@ Let a catalog row say its limit is per account, and count those buckets per
 credential rather than per credential and model.
 
 ## Comments
+
+- Resolved: `free_quota_catalog.per_account` (migration 00009), set on the
+  OpenRouter `:free` rows. A per-account row's buckets are keyed by the
+  credential alone, so every per-account model on one key spends the same
+  `free:*` buckets. Rows sharing an account are expected to carry the same
+  limits; if they differ, each spend applies its own row's rule to the shared
+  bucket.
