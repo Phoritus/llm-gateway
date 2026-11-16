@@ -44,7 +44,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
 | [16](issues/16-smtp-end-to-end.md) | Check real mail delivery before a production deploy | `ready-for-human` | - |
 | [17](issues/17-sdk-compat-check.md) | Compatibility check: the official OpenAI SDK and one IDE client | `resolved` | 06 |
-| [18](issues/18-load-test.md) | Load test against the mock: under 10ms p50 added latency | `ready-for-agent` | - |
+| [18](issues/18-load-test.md) | Load test against the mock: under 10ms p50 added latency | `resolved` | - |
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
@@ -251,6 +251,13 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   surfaced as the client's own error with our status, code and message,
   including a failure after the first chunk. `GET /v1/models` is missing and
   went unused; it is ticket 23, for triage.
+
+- Ticket 18 (load test): `make loadtest` runs vegeta against `mock/echo` on a
+  gateway it starts itself with the `/v1` limits raised, so it measures the
+  gateway rather than its 429s. On the dev machine p50 added latency is about
+  1.6ms at 100/s and 2.6 to 3.2ms at 500/s, against a 10ms target; peak
+  memory is about 150 MB at either rate, against Render's 512 MB. No gateway
+  change was needed.
 
 ## Fog
 

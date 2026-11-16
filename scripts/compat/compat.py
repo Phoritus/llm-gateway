@@ -10,7 +10,7 @@ only in development. It creates a throwaway account, confirms its address
 directly in the development database (the dev mailer only logs the link), and
 gives the account a mock credential, a route per mock script and a gateway
 key. The key is written to COMPAT_KEY_FILE when that is set, so the IDE client
-check can reuse the same workspace.
+check and the load test can reuse the same workspace. --setup-only stops there.
 """
 
 import os
@@ -91,6 +91,8 @@ def main() -> int:
     if path := os.environ.get("COMPAT_KEY_FILE"):
         with open(path, "w") as f:
             f.write(key)
+    if "--setup-only" in sys.argv:
+        return 0
 
     print(f"openai {openai.__version__} against {BASE}/v1")
     client = openai.OpenAI(base_url=BASE + "/v1", api_key=key, max_retries=0, timeout=30)

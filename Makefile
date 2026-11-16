@@ -119,6 +119,10 @@ test-race: ## Run every test under the race detector (needs cgo)
 compat: ## Check the OpenAI SDK and Continue CLI against a running dev gateway
 	@scripts/compat.sh
 
+.PHONY: loadtest
+loadtest: ## Load /v1 against the mock: p50 under 10ms, memory bounded
+	@scripts/loadtest.sh
+
 .PHONY: test-db-up
 test-db-up: ## Start the throwaway test Postgres on its own port
 	@scripts/test.sh db-up
