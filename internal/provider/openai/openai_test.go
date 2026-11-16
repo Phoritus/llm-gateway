@@ -158,6 +158,7 @@ func TestClassifiesUpstreamRefusals(t *testing.T) {
 		{"per-minute limit", 429, http.Header{"Retry-After": {"12"}}, `{"error":{"message":"Rate limit reached"}}`, provider.ErrRateLimited, 12 * time.Second},
 		{"limit in ms", 429, http.Header{"Retry-After-Ms": {"1500"}, "Retry-After": {"9"}}, `{}`, provider.ErrRateLimited, 1500 * time.Millisecond},
 		{"quota as 429", 429, http.Header{"Retry-After": {"3"}}, `{"error":{"message":"exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}`, provider.ErrQuota, 0},
+		{"no credit as 429", 429, nil, `{"error":{"message":"You have no credits remaining.","type":"insufficient_quota","param":null,"code":"credit_balance_exhausted"}}`, provider.ErrQuota, 0},
 		{"context by code", 400, nil, `{"error":{"message":"too long","code":"context_length_exceeded"}}`, provider.ErrContextTooLong, 0},
 		{"context by wording", 400, nil, `{"error":{"message":"Please reduce the length of the messages or completion."}}`, provider.ErrContextTooLong, 0},
 		{"context, unwrapped", 400, nil, `{"message":"Please reduce the length of the messages","type":"invalid_request_error","code":"context_length_exceeded"}`, provider.ErrContextTooLong, 0},
