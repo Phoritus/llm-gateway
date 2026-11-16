@@ -43,12 +43,13 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
 | [16](issues/16-smtp-end-to-end.md) | Check real mail delivery before a production deploy | `ready-for-human` | - |
-| [17](issues/17-sdk-compat-check.md) | Compatibility check: the official OpenAI SDK and one IDE client | `ready-for-agent` | 06 |
+| [17](issues/17-sdk-compat-check.md) | Compatibility check: the official OpenAI SDK and one IDE client | `resolved` | 06 |
 | [18](issues/18-load-test.md) | Load test against the mock: under 10ms p50 added latency | `ready-for-agent` | - |
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
 | [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `ready-for-agent` | 13 |
+| [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `needs-triage` | - |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -241,6 +242,15 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   otherwise); Cerebras is unchecked and Mistral is now paid-only, so neither
   has rows. OpenRouter's 50 free requests a day are account-wide, so several
   `:free` models on one key are over-counted as free.
+
+- Ticket 17 (client compatibility): `make compat` checks the OpenAI Python
+  SDK and the Continue CLI (the Continue IDE extensions' core) against a
+  running development gateway and the mock, creating a throwaway account each
+  run and confirming its address directly in the development database. Both
+  clients worked with no gateway change: answers, streams, and every error
+  surfaced as the client's own error with our status, code and message,
+  including a failure after the first chunk. `GET /v1/models` is missing and
+  went unused; it is ticket 23, for triage.
 
 ## Fog
 

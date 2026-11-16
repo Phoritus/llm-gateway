@@ -67,6 +67,7 @@ Day to day:
 | `make test` | Unit tests; the ones needing a database skip |
 | `make test-int` | Every test, starting a throwaway Postgres and Redis first |
 | `make test-race` | The same under the race detector (needs cgo and a C compiler) |
+| `make compat` | With `make run` going: the OpenAI Python SDK and the Continue CLI against the mock (needs `uv` and `npx`; each run adds a throwaway account to the dev database) |
 | `make env-secrets` | Fill in a missing or placeholder `MASTER_KEY`/`SESSION_SECRET` |
 | `make docker-build` | Build the container image |
 
