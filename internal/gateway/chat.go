@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"llm-gateway/internal/cache"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
@@ -83,7 +84,8 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// The limits come before the route is resolved: resolving it is a
 	// Postgres query, and a key past its limit should not get to make one.
-	reserved, ok := d.reserve(w, r, key, estimateTokens(bodyBytes))
+	estimate := estimateTokens(bodyBytes)
+	reserved, ok := d.reserve(w, r, key, estimate)
 	if !ok {
 		return
 	}
@@ -104,46 +106,74 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	obs.routed, obs.alias = true, req.Model
 
-	res, err := d.Router.Run(ctx, route, d.attempt(req))
-	obs.attempts = res.Attempts()
-	if err != nil && clientGone(ctx) {
-		obs.status, obs.outcome = statusClientClosed, store.OutcomeClientGone
-		return
-	}
-	d.logAttempts(r, res.Steps)
-	setFallbackHeaders(w.Header(), res)
-	if err != nil {
-		obs.status, obs.outcome = d.writeUpstreamError(w, r, withDeadline(ctx, err))
-		return
-	}
-	stream, first := res.Stream, res.First
-	defer stream.Close()
-	cost.observe(first)
-	obs.answered, obs.target, obs.firstChunk = true, res.Target, time.Now()
-	obs.status, obs.outcome = http.StatusOK, store.OutcomeOK
-
-	if req.Stream {
-		wantsUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		obs.outcome = d.streamResponse(w, r, stream, first, &cost, wantsUsage)
-		return
-	}
-
-	var a provider.Assembler
-	a.Add(first)
-	for {
-		chunk, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			break
+	var (
+		stream provider.Stream
+		first  *provider.ChatChunk
+		// charged is where the chunks' usage is counted as this request's cost.
+		charged = &cost
+	)
+	cached := d.lookupCache(r, key.WorkspaceID, route, req)
+	if cached.hit != nil {
+		// The stored answer is sent as a stream, by the code that sends a live
+		// one. The usage it carries was spent by the request that stored it,
+		// so it is counted nowhere: cost stays empty, which refunds the whole
+		// token reservation and records no tokens.
+		stream, charged = cache.Replay(&cached.hit.Response), &spent{}
+		first, _ = stream.Next()
+		obs.cached = true
+		obs.target = store.ResolvedTarget{Vendor: cached.hit.Vendor, Model: cached.hit.Model}
+		w.Header().Set("X-Cache", "HIT")
+		setFallbackHeaders(w.Header(), router.Result{})
+	} else {
+		if cached.key != "" {
+			w.Header().Set("X-Cache", "MISS")
 		}
-		if err != nil {
-			// Nothing has been written yet, so this is still a status.
-			obs.status, obs.outcome = d.failBeforeFirstByte(w, r, err)
+		if route.FreeFirst && d.Quota != nil {
+			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
+		}
+		res, err := d.Router.Run(ctx, route, d.attempt(req))
+		obs.attempts = res.Attempts()
+		if err != nil && clientGone(ctx) {
+			obs.status, obs.outcome = statusClientClosed, store.OutcomeClientGone
 			return
 		}
-		cost.observe(chunk)
-		a.Add(chunk)
+		d.logAttempts(r, res.Steps)
+		setFallbackHeaders(w.Header(), res)
+		if err != nil {
+			obs.status, obs.outcome = d.writeUpstreamError(w, r, withDeadline(ctx, err))
+			return
+		}
+		stream, first, obs.target = res.Stream, res.First, res.Target
+		defer func() { d.spendFree(ctx, res.Target, &cost, estimate) }()
 	}
-	writeJSON(w, http.StatusOK, a.Response())
+	defer stream.Close()
+	charged.observe(first)
+	obs.answered, obs.firstChunk = true, time.Now()
+	obs.status, obs.outcome = http.StatusOK, store.OutcomeOK
+
+	whole := &assembled{Stream: stream}
+	whole.answer.Add(first)
+	if req.Stream {
+		wantsUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		obs.outcome = d.streamResponse(w, r, whole, first, charged, wantsUsage)
+	} else {
+		for {
+			chunk, err := whole.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				// Nothing has been written yet, so this is still a status.
+				obs.status, obs.outcome = d.failBeforeFirstByte(w, r, err)
+				return
+			}
+			charged.observe(chunk)
+		}
+		writeJSON(w, http.StatusOK, whole.answer.Response())
+	}
+	if !obs.cached && whole.complete {
+		d.storeAnswer(ctx, cached.key, obs.target, whole.answer.Response())
+	}
 }
 
 // attempt is one call to one target: the stream opened and its first chunk

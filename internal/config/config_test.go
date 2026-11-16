@@ -36,7 +36,7 @@ func apply(t *testing.T, env map[string]string) {
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
-		"USAGE_QUEUE_SIZE", "USAGE_RETENTION", "SHUTDOWN_TIMEOUT",
+		"USAGE_QUEUE_SIZE", "USAGE_RETENTION", "SHUTDOWN_TIMEOUT", "CACHE_TTL",
 	} {
 		t.Setenv(key, env[key])
 	}
@@ -347,6 +347,25 @@ func TestLoadOwnsTheUsageSettings(t *testing.T) {
 		t.Errorf("Load() with USAGE_RETENTION=1h = %v, want it accepted: there is no floor", err)
 	} else if cfg.UsageRetention != time.Hour {
 		t.Errorf("USAGE_RETENTION=1h loaded as %s", cfg.UsageRetention)
+	}
+}
+
+func TestLoadOwnsTheCacheTTL(t *testing.T) {
+	load := func(raw string) (*Config, error) {
+		env := productionEnv(t)
+		env["CACHE_TTL"] = raw
+		apply(t, env)
+		return Load()
+	}
+	for raw, want := range map[string]time.Duration{"": time.Hour, "10m": 10 * time.Minute, "0": 0, "0s": 0} {
+		if cfg, err := load(raw); err != nil || cfg.CacheTTL != want {
+			t.Errorf("Load() with CACHE_TTL=%q = %v, %v; want %s", raw, cfg, err, want)
+		}
+	}
+	for _, bad := range []string{"-1s", "soon", "60"} {
+		if _, err := load(bad); err == nil || !strings.Contains(err.Error(), "CACHE_TTL") {
+			t.Errorf("Load() with CACHE_TTL=%q = %v, want it refused by name", bad, err)
+		}
 	}
 }
 

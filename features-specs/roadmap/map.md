@@ -39,7 +39,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [10](issues/10-v1-rate-limiting.md) | Rate limiting on /v1: reserve, then reconcile | `resolved` | 06 |
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `resolved` | 11 |
-| [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `ready-for-agent` | 12 |
+| [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `resolved` | 12 |
 | [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
 | [16](issues/16-smtp-end-to-end.md) | Check real mail delivery before a production deploy | `ready-for-human` | - |
@@ -48,6 +48,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
+| [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `ready-for-agent` | 13 |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -217,6 +218,29 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   at most 300s, so streams as long as `V1_REQUEST_TIMEOUT` survive a deploy
   only if both are raised together (300 and `SHUTDOWN_TIMEOUT=290s`); with the
   defaults a deploy cuts them.
+
+- Ticket 13 (free-first and exact cache): see
+  [design.md](../free-first-and-cache/design.md). A route's `cache` mode is
+  `auto` (temperature 0 only, the default), `always` or `off`; there is no
+  workspace-wide switch until a workspace settings API exists. The key hashes
+  the route id, its `updated_at` and the request with `model`, `stream`,
+  `stream_options` and `user` removed and its JSON re-encoded, so editing a
+  chain invalidates its answers with no purge step (a PUT that changes nothing
+  does too). Tool requests and incomplete or tool-calling answers are never
+  stored; null tool fields count as absent, since SDKs echo `tool_calls: null`
+  every turn. A hit is replayed through the same send path as a live stream,
+  refunds the token reservation, records zero tokens with `cached = true` and
+  counts in `usage_daily.cache_hits`; its metrics carry vendor `cache`. The
+  lookup gives up after 250ms and any cache error is a miss. Free-first only
+  reorders: targets with a `free_quota_catalog` entry and room in their
+  per-credential-and-model buckets go first, the rest keep the user's order
+  behind, because the counts are this gateway's view and the router's skip
+  rules handle a real 429. Every answered request spends its target's free
+  buckets, whatever the route. The catalog seed was checked with free keys
+  for Groq, Gemini and OpenRouter and holds only reported limits (null
+  otherwise); Cerebras is unchecked and Mistral is now paid-only, so neither
+  has rows. OpenRouter's 50 free requests a day are account-wide, so several
+  `:free` models on one key are over-counted as free.
 
 ## Fog
 

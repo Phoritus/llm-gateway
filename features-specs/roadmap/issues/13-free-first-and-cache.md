@@ -1,6 +1,6 @@
 # 13 Free-first routing and exact cache
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 12
 
 Build-order step 7: `free_quota_catalog`, per-credential buckets, free-first
@@ -10,3 +10,7 @@ stream; `provider.Assembler` can build the stored value while the response
 streams. Spec: [Caching](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md), [Routing](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+## Answer
+
+Implemented as [design.md](../../free-first-and-cache/design.md) describes, with the deviations recorded under Decisions so far in [map.md](../map.md).

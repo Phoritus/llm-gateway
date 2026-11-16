@@ -61,6 +61,8 @@ type UsageDay struct {
 	PromptTokens     int64
 	CompletionTokens int64
 	LatencyMsSum     int64
+	// CacheHits is how many of Requests the exact cache answered.
+	CacheHits int64
 }
 
 // WriteBatch stores events and adds them to the daily rollup in one
@@ -102,13 +104,15 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		                          $14::boolean[], $15::timestamptz[])
 		     ON CONFLICT (id) DO NOTHING
 		     RETURNING workspace_id, created_at, route_alias, vendor, model, outcome,
-		               prompt_tokens, completion_tokens, latency_ms
+		               prompt_tokens, completion_tokens, latency_ms, cached
 		 )
 		 INSERT INTO usage_daily (workspace_id, day, route_alias, vendor, model,
-		                          requests, errors, prompt_tokens, completion_tokens, latency_ms_sum)
+		                          requests, errors, prompt_tokens, completion_tokens, latency_ms_sum,
+		                          cache_hits)
 		 SELECT workspace_id, (created_at AT TIME ZONE 'UTC')::date, route_alias, vendor, model,
 		        count(*), count(*) FILTER (WHERE outcome <> ALL($16::text[])),
-		        sum(prompt_tokens), sum(completion_tokens), sum(latency_ms)
+		        sum(prompt_tokens), sum(completion_tokens), sum(latency_ms),
+		        count(*) FILTER (WHERE cached)
 		   FROM stored
 		  GROUP BY 1, 2, 3, 4, 5
 		  ORDER BY 1, 2, 3, 4, 5
@@ -117,7 +121,8 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		     errors            = usage_daily.errors + EXCLUDED.errors,
 		     prompt_tokens     = usage_daily.prompt_tokens + EXCLUDED.prompt_tokens,
 		     completion_tokens = usage_daily.completion_tokens + EXCLUDED.completion_tokens,
-		     latency_ms_sum    = usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum`,
+		     latency_ms_sum    = usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum,
+		     cache_hits        = usage_daily.cache_hits + EXCLUDED.cache_hits`,
 		ids, ws, keys, route, vendor, model, status, outcome, attempts, prompt, completion, latency, tt,
 		cached, created, notErrors); err != nil {
 		return fmt.Errorf("write usage batch: %w", err)
@@ -133,7 +138,8 @@ func (s *Store) Daily(ctx context.Context, workspaceID string, from, to time.Tim
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT day, route_alias, vendor, model, requests, errors, prompt_tokens, completion_tokens, latency_ms_sum
+		`SELECT day, route_alias, vendor, model, requests, errors, prompt_tokens, completion_tokens, latency_ms_sum,
+		        cache_hits
 		   FROM usage_daily
 		  WHERE workspace_id = $1 AND day BETWEEN $2::date AND $3::date
 		    AND ($4 = '' OR route_alias = $4)
@@ -145,7 +151,7 @@ func (s *Store) Daily(ctx context.Context, workspaceID string, from, to time.Tim
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (UsageDay, error) {
 		var d UsageDay
 		err := row.Scan(&d.Day, &d.RouteAlias, &d.Vendor, &d.Model, &d.Requests, &d.Errors,
-			&d.PromptTokens, &d.CompletionTokens, &d.LatencyMsSum)
+			&d.PromptTokens, &d.CompletionTokens, &d.LatencyMsSum, &d.CacheHits)
 		return d, err
 	})
 }

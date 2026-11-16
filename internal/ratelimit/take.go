@@ -13,6 +13,9 @@ import (
 //go:embed take.lua
 var takeScript string
 
+//go:embed peek.lua
+var peekScript string
+
 // Bucket is one bucket and what this call spends from it. Scope is the metric
 // label of a refusal, so it must be a fixed name, exactly as for AllowN.
 type Bucket struct {
@@ -60,6 +63,37 @@ func (l *Limiter) Settle(ctx context.Context, buckets []Bucket) error {
 	}
 	_, _, err := l.run(ctx, buckets, true)
 	return err
+}
+
+// Peek returns the level each bucket would have now, in the order given. It
+// is read-only: no bucket is spent, created or kept alive, Cost is ignored,
+// and nothing is counted as a rejection.
+func (l *Limiter) Peek(ctx context.Context, buckets []Bucket) ([]float64, error) {
+	if err := checkRules(buckets); err != nil {
+		return nil, err
+	}
+	if len(buckets) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, len(buckets))
+	args := make([]any, 0, 1+2*len(buckets))
+	args = append(args, time.Now().UnixMilli())
+	for i, b := range buckets {
+		keys[i] = l.key(b.Scope, b.ID)
+		args = append(args, b.Rule.Burst, b.Rule.Refill)
+	}
+	raw, err := l.peek.Run(ctx, l.client, keys, args...).Int64Slice()
+	if err != nil {
+		return nil, fmt.Errorf("ratelimit: peek buckets: %w", err)
+	}
+	if len(raw) != len(buckets) {
+		return nil, fmt.Errorf("ratelimit: peek script returned %d values, want %d", len(raw), len(buckets))
+	}
+	levels := make([]float64, len(raw))
+	for i, v := range raw {
+		levels[i] = float64(v) / 1000
+	}
+	return levels, nil
 }
 
 // run evaluates the script. Its second result marks the buckets that refused.

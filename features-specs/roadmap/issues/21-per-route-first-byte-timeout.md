@@ -20,3 +20,9 @@ setting (or a target setting), with 30s as the default.
 Deferred from ticket 11, where it was a comment from ticket 08's live run.
 
 ## Comments
+
+- 2026-11-15, checking ticket 13's catalog with a free key: Gemini's
+  `gemini-3.8-flash` streamed its first byte after 92s and 106s on a
+  20-token "Say ok" (`gemini-3.5-flash-lite`: 0.9s). Through the gateway it
+  can only end in `ErrTimeout`. It was left out of `free_quota_catalog` for
+  that reason; a per-route timeout would let a route opt into it.

@@ -25,6 +25,7 @@ type usageDayView struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	AvgLatencyMs     int64  `json:"avg_latency_ms"`
+	CacheHits        int64  `json:"cache_hits"`
 }
 
 type usageEventView struct {
@@ -39,6 +40,7 @@ type usageEventView struct {
 	CompletionTokens int           `json:"completion_tokens"`
 	LatencyMs        int           `json:"latency_ms"`
 	TTFTMs           int           `json:"ttft_ms"`
+	Cached           bool          `json:"cached"`
 }
 
 // handleUsage is GET /api/usage: the daily rollup for a range of UTC days, and
@@ -70,6 +72,7 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 		dayViews[i] = usageDayView{
 			Day: u.Day.Format(usageDateLayout), Route: u.RouteAlias, Vendor: u.Vendor, Model: u.Model,
 			Requests: u.Requests, Errors: u.Errors, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+			CacheHits: u.CacheHits,
 		}
 		if u.Requests > 0 {
 			dayViews[i].AvgLatencyMs = u.LatencyMsSum / u.Requests
@@ -80,7 +83,7 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 		eventViews[i] = usageEventView{
 			CreatedAt: e.CreatedAt, Route: e.RouteAlias, Vendor: e.Vendor, Model: e.Model, Status: e.Status,
 			Outcome: e.Outcome, Attempts: e.Attempts, PromptTokens: e.PromptTokens,
-			CompletionTokens: e.CompletionTokens, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs,
+			CompletionTokens: e.CompletionTokens, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs, Cached: e.Cached,
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"days": dayViews, "recent": eventViews})

@@ -18,6 +18,7 @@ import (
 
 	"llm-gateway/internal/api"
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/cache"
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
@@ -25,6 +26,7 @@ import (
 	"llm-gateway/internal/provider/anthropic"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/provider/openai"
+	"llm-gateway/internal/quota"
 	"llm-gateway/internal/ratelimit"
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
@@ -46,6 +48,9 @@ const (
 	// retentionInterval is how often old raw usage events are pruned. Nothing
 	// depends on the exact cadence, so it is not configuration.
 	retentionInterval = time.Hour
+	// catalogInterval is how often the free quota catalog is read again, which
+	// is how long a corrected row takes to apply.
+	catalogInterval = 10 * time.Minute
 )
 
 func main() {
@@ -236,6 +241,26 @@ func run(logger *slog.Logger) error {
 	if err := usageRecorder.RegisterMetrics(); err != nil {
 		return err
 	}
+	v1Limiter := ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger)
+
+	// A catalog that cannot be read leaves every route in its own order, which
+	// is the service working without one of its optimizations, so it is not a
+	// reason to refuse to start. The refresh job tries again.
+	catalog := &quota.Catalog{}
+	if err := catalog.Load(ctx, st); err != nil {
+		logger.Warn("free quota catalog not loaded: free-first routes keep their own order until it is",
+			slog.String("error", err.Error()))
+	}
+
+	// Assigned only when the cache is on: a nil *cache.Exact inside the
+	// interface would not compare equal to nil in the handler.
+	var responseCache gateway.ResponseCache
+	if cfg.CacheTTL > 0 {
+		responseCache = cache.NewExact(rdb, cfg.CacheTTL)
+	} else {
+		logger.Info("CACHE_TTL is 0: the exact cache is off")
+	}
+
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      gatewayKeys,
 		Routes:    deps.Credentials,
@@ -243,7 +268,9 @@ func run(logger *slog.Logger) error {
 		Router:    fallback,
 		Usage:     usageRecorder,
 		Timeout:   cfg.V1RequestTimeout,
-		Limiter:   ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger),
+		Cache:     responseCache,
+		Quota:     quota.New(catalog, v1Limiter, logger),
+		Limiter:   v1Limiter,
 		Limits: gateway.Limits{
 			KeyRequests:          ratelimit.PerMinute(float64(cfg.V1KeyRPM)),
 			KeyTokens:            ratelimit.PerMinute(float64(cfg.V1KeyTPM)),
@@ -285,6 +312,7 @@ func run(logger *slog.Logger) error {
 	go authSvc.RunSweeper(sweeperCtx, 0, logger)
 	go usageRecorder.Run(sweeperCtx)
 	go usage.RunRetention(sweeperCtx, st, cfg.UsageRetention, retentionInterval, logger)
+	go catalog.Run(sweeperCtx, st, catalogInterval, logger)
 	go func() {
 		defer close(flusherDone)
 		gatewayKeys.RunLastUsedFlusher(sweeperCtx, logger)

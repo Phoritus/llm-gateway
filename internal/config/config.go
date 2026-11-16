@@ -93,6 +93,9 @@ type Config struct {
 	// UsageRetention is how long raw usage events are kept. The daily rollup
 	// is kept for good.
 	UsageRetention time.Duration
+	// CacheTTL is how long the exact cache keeps an answer. Zero turns the
+	// exact cache off.
+	CacheTTL       time.Duration
 	CookieDomain   string
 	TrustedProxies []netip.Prefix
 	MailFrom       string
@@ -297,6 +300,11 @@ func Load() (*Config, error) {
 	} else {
 		cfg.UsageRetention = d
 	}
+	if d, err := durationOrOff("CACHE_TTL", time.Hour); err != nil {
+		fail("%v", err)
+	} else {
+		cfg.CacheTTL = d
+	}
 
 	// Mail is load-bearing, not decorative: an account cannot be used until its
 	// address is confirmed, so a deployment that cannot send is a deployment
@@ -444,6 +452,22 @@ func durationOr(key string, fallback time.Duration) (time.Duration, error) {
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("%s must be positive, got %s", key, d)
+	}
+	return d, nil
+}
+
+// durationOrOff is durationOr for a setting that zero switches off.
+func durationOrOff(key string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a duration such as 1h, or 0 for off: %v", key, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("%s must not be negative, got %s", key, d)
 	}
 	return d, nil
 }
