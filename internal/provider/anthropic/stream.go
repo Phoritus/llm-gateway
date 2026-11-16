@@ -59,12 +59,9 @@ type toolCallDelta struct {
 }
 
 type stream struct {
-	parent context.Context
 	ctx    context.Context
 	body   io.ReadCloser
 	events *sse.Reader
-	timer  *time.Timer
-	cancel func()
 
 	includeUsage bool
 
@@ -98,11 +95,10 @@ func (s *stream) Next() (*provider.ChatChunk, error) {
 			if errors.Is(err, io.EOF) {
 				s.end = &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before it finished"}
 			} else {
-				s.end = callError(s.parent, s.ctx, err)
+				s.end = callError(s.ctx, err)
 			}
 			continue
 		}
-		s.timer.Stop()
 		var ev streamEvent
 		if err := json.Unmarshal(raw.Data, &ev); err != nil {
 			s.end = &provider.Error{Kind: provider.ErrUpstream, Detail: "malformed event: " + truncate(raw.Data)}
@@ -191,6 +187,5 @@ func finishReason(stop string) string {
 func (s *stream) Close() error {
 	s.end = io.EOF
 	s.queue = nil
-	s.cancel()
 	return s.body.Close()
 }

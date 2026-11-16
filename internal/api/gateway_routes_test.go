@@ -65,7 +65,7 @@ func TestRoutesCRUD(t *testing.T) {
 		t.Fatalf("put: %d %s", put.status, put.raw)
 	}
 	list = alice.do(http.MethodGet, "/api/routes", nil)
-	if !strings.Contains(list.raw, `"targets":[{"credential_id":"`+cred+`","model":"llama-3.1-8b"}]`) {
+	if !strings.Contains(list.raw, `"targets":[{"credential_id":"`+cred+`","model":"llama-3.1-8b","first_byte_timeout_seconds":null}]`) {
 		t.Fatalf("put did not replace the chain: %s", list.raw)
 	}
 
@@ -174,6 +174,11 @@ func TestRouteValidation(t *testing.T) {
 		b["max_hops"] = n
 		return b
 	}
+	withWait := func(seconds any) map[string]any {
+		tg := target(cred, "m")
+		tg["first_byte_timeout_seconds"] = seconds
+		return routeBody("chat", tg)
+	}
 	withCache := func(mode any) map[string]any {
 		b := routeBody("chat", good)
 		b["cache"] = mode
@@ -204,6 +209,10 @@ func TestRouteValidation(t *testing.T) {
 		{"empty model", "targets", routeBody("chat", target(cred, ""))},
 		{"model with a space", "targets", routeBody("chat", target(cred, "a b"))},
 		{"repeated target", "targets", routeBody("chat", good, good)},
+		{"repeated target with another wait", "targets", routeBody("chat", good, withWait(60)["targets"].([]any)[0].(map[string]any))},
+		{"zero first-byte wait", "targets", withWait(0)},
+		{"first-byte wait past 5 minutes", "targets", withWait(301)},
+		{"first-byte wait that overflows into range", "targets", withWait(18446744075)},
 	} {
 		res := alice.do(http.MethodPost, "/api/routes", tc.body)
 		errObj, _ := res.body["error"].(map[string]any)
@@ -245,5 +254,33 @@ func TestURNFormIDsAreNotServerErrors(t *testing.T) {
 		if res := alice.do(http.MethodDelete, path, nil); res.status != http.StatusNoContent {
 			t.Fatalf("delete %s: %d %s", path, res.status, res.raw)
 		}
+	}
+}
+
+func TestATargetsFirstByteWaitIsStoredAndReturned(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	cred := newCredentialID(t, alice)
+	thinker := target(cred, "thinker")
+	thinker["first_byte_timeout_seconds"] = 120
+
+	created := alice.do(http.MethodPost, "/api/routes", routeBody("chat", thinker, target(cred, "fast")))
+	if created.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.status, created.raw)
+	}
+	list := alice.do(http.MethodGet, "/api/routes", nil)
+	data, _ := list.body["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("list: %d %s", list.status, list.raw)
+	}
+	targets, _ := data[0].(map[string]any)["targets"].([]any)
+	if len(targets) != 2 {
+		t.Fatalf("targets: %s", list.raw)
+	}
+	if got := targets[0].(map[string]any)["first_byte_timeout_seconds"]; got != float64(120) {
+		t.Errorf("thinker's wait = %v, want 120", got)
+	}
+	if got, ok := targets[1].(map[string]any)["first_byte_timeout_seconds"]; !ok || got != nil {
+		t.Errorf("default wait = %v (present %v), want null", got, ok)
 	}
 }

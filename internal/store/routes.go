@@ -63,7 +63,17 @@ type Route struct {
 type RouteTarget struct {
 	CredentialID string
 	Model        string
+	// FirstByteTimeout is how long the target may take to its first chunk,
+	// in whole seconds. Zero is the router's default.
+	FirstByteTimeout time.Duration
 }
+
+// The bounds of RouteTarget.FirstByteTimeout, which the column's CHECK also
+// holds to.
+const (
+	MinFirstByteTimeout = time.Second
+	MaxFirstByteTimeout = 300 * time.Second
+)
 
 type RouteSpec struct {
 	Alias     string
@@ -197,14 +207,19 @@ func commitRoute(ctx context.Context, tx pgx.Tx) error {
 func insertTargets(ctx context.Context, tx pgx.Tx, routeID, workspaceID string, targets []RouteTarget) error {
 	creds := make([]string, len(targets))
 	models := make([]string, len(targets))
+	waits := make([]*int32, len(targets))
 	for i, t := range targets {
 		creds[i], models[i] = t.CredentialID, t.Model
+		if t.FirstByteTimeout > 0 {
+			s := int32(t.FirstByteTimeout / time.Second)
+			waits[i] = &s
+		}
 	}
 	_, err := tx.Exec(ctx,
-		`INSERT INTO route_targets (route_id, workspace_id, position, credential_id, model)
-		 SELECT $1, $2, t.ord - 1, t.cred, t.model
-		   FROM unnest($3::uuid[], $4::text[]) WITH ORDINALITY AS t(cred, model, ord)`,
-		routeID, workspaceID, creds, models)
+		`INSERT INTO route_targets (route_id, workspace_id, position, credential_id, model, first_byte_timeout_seconds)
+		 SELECT $1, $2, t.ord - 1, t.cred, t.model, t.wait
+		   FROM unnest($3::uuid[], $4::text[], $5::integer[]) WITH ORDINALITY AS t(cred, model, wait, ord)`,
+		routeID, workspaceID, creds, models, waits)
 	if pgCode(err) == foreignKeyViolation {
 		return ErrUnknownCredential
 	}
@@ -240,7 +255,7 @@ func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, er
 		ids[i] = routes[i].ID
 	}
 	rows, err = tx.Query(ctx,
-		`SELECT route_id, credential_id, model FROM route_targets
+		`SELECT route_id, credential_id, model, first_byte_timeout_seconds FROM route_targets
 		  WHERE workspace_id = $1 AND route_id = ANY($2::uuid[]) ORDER BY route_id, position`, workspaceID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("list route targets: %w", err)
@@ -249,9 +264,11 @@ func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, er
 	for rows.Next() {
 		var routeID string
 		var t RouteTarget
-		if err := rows.Scan(&routeID, &t.CredentialID, &t.Model); err != nil {
+		var wait *int32
+		if err := rows.Scan(&routeID, &t.CredentialID, &t.Model, &wait); err != nil {
 			return nil, fmt.Errorf("scan route target: %w", err)
 		}
+		t.FirstByteTimeout = seconds(wait)
 		if r := index[routeID]; r != nil {
 			r.Targets = append(r.Targets, t)
 		}
@@ -277,4 +294,11 @@ func (s *Store) DeleteRoute(ctx context.Context, workspaceID, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func seconds(n *int32) time.Duration {
+	if n == nil {
+		return 0
+	}
+	return time.Duration(*n) * time.Second
 }

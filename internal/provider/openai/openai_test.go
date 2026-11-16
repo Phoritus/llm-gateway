@@ -247,15 +247,17 @@ func TestAStreamThatStopsEarlyIsAFailure(t *testing.T) {
 	}
 }
 
-func TestFirstByteTimeout(t *testing.T) {
-	opts := Options{FirstByteTimeout: 100 * time.Millisecond}
+func TestAnEndedContextStopsTheWaitForTheFirstEvent(t *testing.T) {
+	const wait = 100 * time.Millisecond
 
 	t.Run("no headers", func(t *testing.T) {
 		srv := upstream(t, func(w http.ResponseWriter, r *http.Request) { hang(r) })
-		_, err := newProvider(srv, Endpoint{}, opts).ChatStream(context.Background(),
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		_, err := newProvider(srv, Endpoint{}, Options{}).ChatStream(ctx,
 			chatRequest(t, `{"model":"m","messages":[]}`), provider.Credential{APIKey: testKey})
-		if !errors.Is(err, provider.ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", err)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the context's", err)
 		}
 	})
 
@@ -266,33 +268,16 @@ func TestFirstByteTimeout(t *testing.T) {
 			w.(http.Flusher).Flush()
 			hang(r)
 		})
-		s, err := newProvider(srv, Endpoint{}, opts).ChatStream(context.Background(),
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		s, err := newProvider(srv, Endpoint{}, Options{}).ChatStream(ctx,
 			chatRequest(t, `{"model":"m","messages":[]}`), provider.Credential{APIKey: testKey})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer s.Close()
-		if _, err := s.Next(); !errors.Is(err, provider.ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", err)
-		}
-	})
-
-	t.Run("a slow stream after the first event is not cut off", func(t *testing.T) {
-		srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
-			sseHeader(w)
-			event(w, `{"choices":[{"index":0,"delta":{"content":"a"}}]}`)
-			time.Sleep(3 * opts.FirstByteTimeout)
-			event(w, `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
-			event(w, `[DONE]`)
-		})
-		s, err := newProvider(srv, Endpoint{}, opts).ChatStream(context.Background(),
-			chatRequest(t, `{"model":"m","messages":[]}`), provider.Credential{APIKey: testKey})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer s.Close()
-		if chunks, err := drain(t, s); err != nil || len(chunks) != 2 {
-			t.Fatalf("got %d chunks, err %v", len(chunks), err)
+		if _, err := s.Next(); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the context's", err)
 		}
 	})
 }

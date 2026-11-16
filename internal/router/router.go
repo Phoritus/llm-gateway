@@ -21,6 +21,9 @@ const (
 	// its first. The first retry is exempt, so one slow target never leaves
 	// a route without its fallback.
 	budget = 45 * time.Second
+	// DefaultFirstByteTimeout is how long a target with no wait of its own
+	// may take to its first chunk.
+	DefaultFirstByteTimeout = 30 * time.Second
 	// copyTTL is how long a value read from the shared store is reused in
 	// process, so that a busy route costs about one read a second.
 	copyTTL = time.Second
@@ -38,8 +41,20 @@ var (
 		metric.WithDescription("Times a vendor's circuit breaker opened."))
 )
 
-// Attempt opens a stream to one target and reads its first chunk. A stream
-// returned alongside an error is closed by Run.
+// FirstByteTimeout is how long t may take to its first chunk.
+func FirstByteTimeout(t store.ResolvedTarget) time.Duration {
+	if t.FirstByteTimeout > 0 {
+		return t.FirstByteTimeout
+	}
+	return DefaultFirstByteTimeout
+}
+
+func extraWait(t store.ResolvedTarget) time.Duration {
+	return max(0, FirstByteTimeout(t)-DefaultFirstByteTimeout)
+}
+
+// Attempt opens a stream to one target and reads its first chunk, within
+// FirstByteTimeout(t). A stream returned alongside an error is closed by Run.
 type Attempt func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error)
 
 // Step is what became of one target, in the order the route lists them.
@@ -109,9 +124,10 @@ func (r *Router) Wait() { r.pending.Wait() }
 // that ends stops the loop and its error is returned as it came.
 func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt Attempt) (Result, error) {
 	var (
-		res     Result
-		seen    tally
-		started time.Time
+		res             Result
+		seen            tally
+		started         time.Time
+		budgetWithWaits = budget
 		// tooLong holds the models that refused this request for its length.
 		// Another credential for the same model has the same window.
 		tooLong = map[string]bool{}
@@ -123,7 +139,7 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		if seen.attempts >= max(1, route.MaxHops) {
 			break
 		}
-		if seen.attempts >= 2 && now.Sub(started) >= budget {
+		if seen.attempts >= 2 && now.Sub(started) >= budgetWithWaits {
 			break
 		}
 		step := Step{Vendor: t.Vendor, Model: t.Model, Outcome: OutcomeSkipped}
@@ -137,6 +153,7 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		if seen.attempts == 0 {
 			started = now
 		}
+		budgetWithWaits += extraWait(t)
 
 		stream, first, err := attempt(ctx, t)
 		if err == nil {

@@ -59,6 +59,7 @@ func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*s
 	}
 	route := &store.ResolvedRoute{ID: "r1", MaxHops: 3}
 	for _, model := range strings.Split(alias, ",") {
+		model, firstByte := modelAndFirstByteWait(model)
 		vendor := provider.VendorMock
 		if model == renamedAlias {
 			model = mock.ModelEcho
@@ -67,10 +68,17 @@ func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*s
 			vendor, model = provider.VendorOpenAI, rest
 		}
 		route.Targets = append(route.Targets, store.ResolvedTarget{
-			CredentialID: "c-" + model, Vendor: vendor, Model: model, Secret: testSecret,
+			CredentialID: "c-" + model, Vendor: vendor, Model: model, Secret: testSecret, FirstByteTimeout: firstByte,
 		})
 	}
 	return route, nil
+}
+
+// modelAndFirstByteWait splits "slow@50ms" into the model and its wait.
+func modelAndFirstByteWait(s string) (string, time.Duration) {
+	model, wait, _ := strings.Cut(s, "@")
+	d, _ := time.ParseDuration(wait)
+	return model, d
 }
 
 // fakeUsage keeps every event it is given.

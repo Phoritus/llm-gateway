@@ -47,7 +47,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [18](issues/18-load-test.md) | Load test against the mock: under 10ms p50 added latency | `resolved` | - |
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
-| [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `ready-for-agent` | 11 |
+| [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `resolved` | 11 |
 | [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `ready-for-agent` | 13 |
 | [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `needs-triage` | - |
 
@@ -258,6 +258,13 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   1.6ms at 100/s and 2.6 to 3.2ms at 500/s, against a 10ms target; peak
   memory is about 150 MB at either rate, against Render's 512 MB. No gateway
   change was needed.
+
+- Ticket 21 (first-byte timeout): per target, not per route
+  (`first_byte_timeout_seconds`, 1 to 300, null is 30s), because only the
+  slow model in a chain should wait longer. The timer belongs to the
+  gateway's `attempt` now, not to each adapter. The router's 45s budget
+  grows by the extra wait of each target it attempted, so a long-thinking
+  first target does not cost the rest of the chain its time.
 
 ## Fog
 

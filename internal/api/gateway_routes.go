@@ -22,8 +22,9 @@ const (
 )
 
 type routeTargetView struct {
-	CredentialID string `json:"credential_id"`
-	Model        string `json:"model"`
+	CredentialID            string `json:"credential_id"`
+	Model                   string `json:"model"`
+	FirstByteTimeoutSeconds *int   `json:"first_byte_timeout_seconds"`
 }
 
 type routeView struct {
@@ -40,7 +41,11 @@ type routeView struct {
 func routeViewOf(r store.Route) routeView {
 	targets := make([]routeTargetView, len(r.Targets))
 	for i, t := range r.Targets {
-		targets[i] = routeTargetView(t)
+		targets[i] = routeTargetView{CredentialID: t.CredentialID, Model: t.Model}
+		if t.FirstByteTimeout > 0 {
+			s := int(t.FirstByteTimeout / time.Second)
+			targets[i].FirstByteTimeoutSeconds = &s
+		}
 	}
 	return routeView{ID: r.ID, Alias: r.Alias, FreeFirst: r.FreeFirst, Cache: r.Cache, MaxHops: r.MaxHops,
 		Targets: targets, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
@@ -149,8 +154,9 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 		return store.RouteSpec{}, false
 	}
 
+	type targetKey struct{ credentialID, model string }
 	targets := make([]store.RouteTarget, len(req.Targets))
-	seen := make(map[store.RouteTarget]bool, len(req.Targets))
+	seen := make(map[targetKey]bool, len(req.Targets))
 	for i, t := range req.Targets {
 		id, err := uuid.Parse(t.CredentialID)
 		if err != nil {
@@ -161,13 +167,22 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 			invalidField(w, "targets", "targets["+strconv.Itoa(i)+"].model must be 1 to 200 printable ASCII characters with no spaces.")
 			return store.RouteSpec{}, false
 		}
-		target := store.RouteTarget{CredentialID: id.String(), Model: t.Model}
-		if seen[target] {
+		key := targetKey{id.String(), t.Model}
+		if seen[key] {
 			invalidField(w, "targets", "targets["+strconv.Itoa(i)+"] repeats an earlier target.")
 			return store.RouteSpec{}, false
 		}
-		seen[target] = true
-		targets[i] = target
+		seen[key] = true
+		targets[i] = store.RouteTarget{CredentialID: key.credentialID, Model: t.Model}
+		if s := t.FirstByteTimeoutSeconds; s != nil {
+			lo, hi := int(store.MinFirstByteTimeout/time.Second), int(store.MaxFirstByteTimeout/time.Second)
+			if *s < lo || *s > hi {
+				invalidField(w, "targets", "targets["+strconv.Itoa(i)+"].first_byte_timeout_seconds must be between "+
+					strconv.Itoa(lo)+" and "+strconv.Itoa(hi)+".")
+				return store.RouteSpec{}, false
+			}
+			targets[i].FirstByteTimeout = time.Duration(*s) * time.Second
+		}
 	}
 	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, Cache: mode, MaxHops: hops, Targets: targets}, true
 }
