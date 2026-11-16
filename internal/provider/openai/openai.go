@@ -46,25 +46,18 @@ var Endpoints = map[provider.Vendor]Endpoint{
 type Options struct {
 	// DialTimeout bounds the TCP connect and, separately, the TLS handshake.
 	DialTimeout time.Duration
-	// FirstByteTimeout bounds the wait from sending the request to the first
-	// event with data.
-	FirstByteTimeout time.Duration
 }
 
 const (
-	defaultDialTimeout      = 5 * time.Second
-	defaultFirstByteTimeout = 30 * time.Second
+	defaultDialTimeout = 5 * time.Second
 
 	maxErrorBody = 64 << 10
 )
 
-var errFirstByte = errors.New("no first byte in time")
-
 // Provider is one endpoint and the client every workspace's calls to it share.
 type Provider struct {
-	endpoint  Endpoint
-	client    *http.Client
-	firstByte time.Duration
+	endpoint Endpoint
+	client   *http.Client
 }
 
 func New(ep Endpoint, opts Options) *Provider {
@@ -85,7 +78,6 @@ func New(ep Endpoint, opts Options) *Provider {
 			// No Timeout: it would cut off a long stream.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		firstByte: orDefault(opts.FirstByteTimeout, defaultFirstByteTimeout),
 	}
 }
 
@@ -96,7 +88,7 @@ func orDefault(d, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-func (p *Provider) ChatStream(parent context.Context, req *provider.ChatRequest, cred provider.Credential) (provider.Stream, error) {
+func (p *Provider) ChatStream(ctx context.Context, req *provider.ChatRequest, cred provider.Credential) (provider.Stream, error) {
 	body := *req
 	body.Stream = true
 	if p.endpoint.NoStreamOptions {
@@ -107,16 +99,8 @@ func (p *Provider) ChatStream(parent context.Context, req *provider.ChatRequest,
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "encode request: " + err.Error()}
 	}
 
-	ctx, cancel := context.WithCancelCause(parent)
-	timer := time.AfterFunc(p.firstByte, func() { cancel(errFirstByte) })
-	release := func() {
-		timer.Stop()
-		cancel(nil)
-	}
-
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint.BaseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		release()
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+cred.APIKey)
@@ -125,27 +109,21 @@ func (p *Provider) ChatStream(parent context.Context, req *provider.ChatRequest,
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		release()
-		return nil, callError(parent, ctx, err)
+		return nil, callError(ctx, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := statusError(resp)
 		resp.Body.Close()
-		release()
 		return nil, err
 	}
 	if mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mediaType != "text/event-stream" {
-		release()
 		resp.Body.Close()
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "answered 200 with Content-Type " + resp.Header.Get("Content-Type")}
 	}
 	return &stream{
-		parent: parent,
 		ctx:    ctx,
 		body:   resp.Body,
 		events: sse.NewReader(resp.Body),
-		timer:  timer,
-		cancel: release,
 	}, nil
 }
 
@@ -157,7 +135,7 @@ func (p *Provider) CheckKey(ctx context.Context, cred provider.Credential) error
 	httpReq.Header.Set("Authorization", "Bearer "+cred.APIKey)
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return callError(ctx, ctx, err)
+		return callError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -166,12 +144,9 @@ func (p *Provider) CheckKey(ctx context.Context, cred provider.Credential) error
 	return nil
 }
 
-func callError(parent, ctx context.Context, err error) error {
-	if parent.Err() != nil {
-		return parent.Err()
-	}
-	if errors.Is(context.Cause(ctx), errFirstByte) {
-		return &provider.Error{Kind: provider.ErrTimeout, Detail: errFirstByte.Error()}
+func callError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
@@ -181,12 +156,9 @@ func callError(parent, ctx context.Context, err error) error {
 }
 
 type stream struct {
-	parent context.Context
 	ctx    context.Context
 	body   io.ReadCloser
 	events *sse.Reader
-	timer  *time.Timer
-	cancel func()
 
 	sawFinishReason bool
 	done            bool
@@ -206,9 +178,8 @@ func (s *stream) Next() (*provider.ChatChunk, error) {
 			}
 			return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before it finished"}
 		}
-		return nil, callError(s.parent, s.ctx, err)
+		return nil, callError(s.ctx, err)
 	}
-	s.timer.Stop()
 
 	if string(ev.Data) == "[DONE]" {
 		s.done = true
@@ -252,7 +223,6 @@ func (s *stream) Next() (*provider.ChatChunk, error) {
 
 func (s *stream) Close() error {
 	s.done = true
-	s.cancel()
 	return s.body.Close()
 }
 

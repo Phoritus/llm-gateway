@@ -404,13 +404,16 @@ func TestNon200WithoutEventStreamIsUpstreamFailure(t *testing.T) {
 	}
 }
 
-func TestFirstByteTimeout(t *testing.T) {
-	opts := Options{FirstByteTimeout: 100 * time.Millisecond}
+func TestAnEndedContextStopsTheWaitForTheFirstEvent(t *testing.T) {
+	const wait = 100 * time.Millisecond
 
 	t.Run("no headers", func(t *testing.T) {
 		srv := upstream(t, func(w http.ResponseWriter, r *http.Request) { hang(r) })
-		if _, err := start(t, newProvider(srv, opts), simpleBody); !errors.Is(err, provider.ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", err)
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		_, err := newProvider(srv, Options{}).ChatStream(ctx, chatRequest(t, simpleBody), provider.Credential{APIKey: testKey})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the context's", err)
 		}
 	})
 
@@ -421,33 +424,39 @@ func TestFirstByteTimeout(t *testing.T) {
 			w.(http.Flusher).Flush()
 			hang(r)
 		})
-		s, err := start(t, newProvider(srv, opts), simpleBody)
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		s, err := newProvider(srv, Options{}).ChatStream(ctx, chatRequest(t, simpleBody), provider.Credential{APIKey: testKey})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer s.Close()
-		if _, err := s.Next(); !errors.Is(err, provider.ErrTimeout) {
-			t.Fatalf("err = %v, want ErrTimeout", err)
+		if _, err := s.Next(); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the context's", err)
 		}
 	})
+}
 
-	t.Run("a slow stream after the first event is not cut off", func(t *testing.T) {
-		srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
-			sseHeader(w)
-			event(w, "message_start", messageStart)
-			time.Sleep(3 * opts.FirstByteTimeout)
-			event(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`)
-			event(w, "message_stop", `{"type":"message_stop"}`)
-		})
-		s, err := start(t, newProvider(srv, opts), simpleBody)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer s.Close()
-		if chunks, err := drain(t, s); err != nil || len(chunks) != 2 {
-			t.Fatalf("got %d chunks, err %v", len(chunks), err)
-		}
+func TestMessageStartIsTheFirstChunk(t *testing.T) {
+	srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
+		sseHeader(w)
+		event(w, "message_start", messageStart)
+		hang(r)
 	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := newProvider(srv, Options{}).ChatStream(ctx, chatRequest(t, simpleBody), provider.Credential{APIKey: testKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	chunk, err := s.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunk.Choices) != 1 || chunk.Choices[0].Delta.Role != "assistant" {
+		t.Errorf("first chunk = %+v, want the assistant's role", chunk)
+	}
 }
 
 func TestNextReturnsPromptlyWhenTheCallerGoesAway(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/provider"
@@ -216,7 +217,7 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, FreeFirst: true, Cache: CacheAlways, Targets: []RouteTarget{
-		{CredentialID: second.ID, Model: "echo"},
+		{CredentialID: second.ID, Model: "echo", FirstByteTimeout: 2 * time.Minute},
 		{CredentialID: first.ID, Model: "llama-3"},
 	}}); err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ResolvedTarget{
-		{CredentialID: second.ID, Vendor: provider.VendorMock, Model: "echo", Secret: "sk-second-secret-0000"},
+		{CredentialID: second.ID, Vendor: provider.VendorMock, Model: "echo", Secret: "sk-second-secret-0000", FirstByteTimeout: 2 * time.Minute},
 		{CredentialID: first.ID, Vendor: provider.VendorGroq, Model: "llama-3", Secret: testSecret},
 	}
 	if !route.FreeFirst || route.Cache != CacheAlways || route.Version == 0 {

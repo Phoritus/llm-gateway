@@ -49,6 +49,37 @@ func TestARateLimitedTargetFailsOverToTheNext(t *testing.T) {
 	wantTrail(t, resp, "2", "mock/rate-limited=rate_limited, mock/echo=ok")
 }
 
+func TestATargetSilentPastItsFirstByteTimeoutFailsOver(t *testing.T) {
+	srv := newServer(t, &mock.Provider{Delay: time.Hour}, time.Minute)
+	resp := post(t, srv, chatBody("slow@50ms,echo", false))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want the second target's answer", resp.StatusCode)
+	}
+	if got := completionText(t, resp.Body); got != "one two three four" {
+		t.Errorf("completion = %q, want the echo", got)
+	}
+	wantTrail(t, resp, "2", "mock/slow=timeout, mock/echo=ok")
+}
+
+func TestTheFirstByteTimeoutStopsAtTheFirstChunk(t *testing.T) {
+	const perChunk, firstByteWait = 40 * time.Millisecond, 60 * time.Millisecond
+	wholeAnswer := 4 * perChunk
+	if wholeAnswer <= firstByteWait || perChunk >= firstByteWait {
+		t.Fatal("the answer must outlast the wait while its first chunk does not")
+	}
+	srv := newServer(t, &mock.Provider{Delay: perChunk}, time.Minute)
+	resp := post(t, srv, chatBody("slow@"+firstByteWait.String(), false))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want the slow target's answer", resp.StatusCode)
+	}
+	if got := completionText(t, resp.Body); got != "one two three four" {
+		t.Errorf("completion = %q, want every word", got)
+	}
+	wantTrail(t, resp, "1", "mock/slow=ok")
+}
+
 func TestAnExhaustedRouteIsAnsweredByWhatItsTargetsSaid(t *testing.T) {
 	cases := []struct {
 		route      string

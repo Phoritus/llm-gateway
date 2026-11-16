@@ -391,6 +391,34 @@ func TestTheBudgetStopsNewAttemptsButNeverTheFirstRetry(t *testing.T) {
 	}
 }
 
+func TestALongerFirstByteWaitExtendsTheBudgetByItsExtra(t *testing.T) {
+	h := newHarness(t)
+	thinker := target("a", provider.VendorGemini, "m1")
+	thinker.FirstByteTimeout = DefaultFirstByteTimeout + time.Minute
+	takes := map[string]time.Duration{"a": budget + time.Second, "b": time.Second, "c": time.Second}
+	var called []string
+	_, err := h.r.Run(context.Background(), &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{
+		thinker, target("b", provider.VendorMistral, "m1"), target("c", provider.VendorCerebras, "m1"),
+	}}, func(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+		called = append(called, t.CredentialID)
+		h.clock.Advance(takes[t.CredentialID])
+		return nil, nil, failure(provider.ErrInvalidRequest, 0)
+	})
+	if err == nil {
+		t.Fatal("every attempt failed, yet the run succeeded")
+	}
+	wantCalled(t, called, "a", "b", "c")
+}
+
+func TestFirstByteTimeoutDefaultsWhenUnset(t *testing.T) {
+	if got := FirstByteTimeout(store.ResolvedTarget{}); got != DefaultFirstByteTimeout {
+		t.Errorf("unset = %v, want %v", got, DefaultFirstByteTimeout)
+	}
+	if got := FirstByteTimeout(store.ResolvedTarget{FirstByteTimeout: time.Minute}); got != time.Minute {
+		t.Errorf("set = %v, want 1m", got)
+	}
+}
+
 func TestContextTooLongSkipsTheSameModelForThisRequestOnly(t *testing.T) {
 	h := newHarness(t)
 	sameModel := target("b", provider.VendorCerebras, "m1")

@@ -179,7 +179,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 // attempt is one call to one target: the stream opened and its first chunk
 // read, which is as far as failover can still happen.
 func (d Deps) attempt(req *provider.ChatRequest) router.Attempt {
-	return func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	return func(parent context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
 		adapter, ok := d.Providers[t.Vendor]
 		if !ok {
 			return nil, nil, router.ErrNoAdapter
@@ -191,16 +191,48 @@ func (d Deps) attempt(req *provider.ChatRequest) router.Attempt {
 		// answer reports.
 		upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
 
-		stream, err := adapter.ChatStream(ctx, &upstream, provider.Credential{APIKey: t.Secret})
+		wait := router.FirstByteTimeout(t)
+		ctx, cancel, stopWaiting := cancelAfterUnlessStopped(parent, wait)
+		stream, first, err := firstChunk(ctx, adapter, &upstream, t)
+		if timedOut := !stopWaiting(); timedOut && parent.Err() == nil {
+			err = &provider.Error{Kind: provider.ErrTimeout, Detail: "no first chunk within " + wait.String()}
+		}
 		if err != nil {
-			return nil, nil, err
+			cancel()
+			return stream, nil, err
 		}
-		first, err := stream.Next()
-		if errors.Is(err, io.EOF) {
-			err = &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before its first chunk"}
-		}
-		return stream, first, err
+		return cancelOnClose{Stream: stream, cancel: cancel}, first, nil
 	}
+}
+
+// cancelAfterUnlessStopped is a context deadline that can be called off:
+// stop reports whether it was stopped before it fired.
+func cancelAfterUnlessStopped(parent context.Context, d time.Duration) (ctx context.Context, cancel context.CancelFunc, stop func() bool) {
+	ctx, cancel = context.WithCancel(parent)
+	return ctx, cancel, time.AfterFunc(d, cancel).Stop
+}
+
+func firstChunk(ctx context.Context, adapter provider.Provider, req *provider.ChatRequest, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	stream, err := adapter.ChatStream(ctx, req, provider.Credential{APIKey: t.Secret})
+	if err != nil {
+		return nil, nil, err
+	}
+	first, err := stream.Next()
+	if errors.Is(err, io.EOF) {
+		err = &provider.Error{Kind: provider.ErrUpstream, Detail: "stream ended before its first chunk"}
+	}
+	return stream, first, err
+}
+
+type cancelOnClose struct {
+	provider.Stream
+	cancel context.CancelFunc
+}
+
+func (s cancelOnClose) Close() error {
+	err := s.Stream.Close()
+	s.cancel()
+	return err
 }
 
 // setFallbackHeaders tells the client which targets its request went

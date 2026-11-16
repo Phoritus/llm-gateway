@@ -209,6 +209,9 @@ type ResolvedTarget struct {
 	Vendor       provider.Vendor
 	Model        string
 	Secret       string
+	// FirstByteTimeout is how long the target may take to its first chunk.
+	// Zero is router.DefaultFirstByteTimeout.
+	FirstByteTimeout time.Duration
 }
 
 // ResolveRoute finds the workspace's route for an alias and opens every
@@ -219,7 +222,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 		return nil, ErrNotFound
 	}
 	rows, err := c.store.pool.Query(ctx,
-		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.updated_at, c.id, c.provider, t.model, c.key_id, c.ciphertext
+		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.updated_at, c.id, c.provider, t.model, t.first_byte_timeout_seconds, c.key_id, c.ciphertext
 		   FROM routes r
 		   JOIN route_targets t ON t.route_id = r.id AND t.workspace_id = r.workspace_id
 		   JOIN provider_credentials c ON c.id = t.credential_id AND c.workspace_id = t.workspace_id
@@ -235,9 +238,10 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 		var (
 			sealed  sealedCredential
 			model   string
+			wait    *int32
 			updated time.Time
 		)
-		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &updated, &sealed.id, &sealed.vendor, &model, &sealed.keyID, &sealed.blob); err != nil {
+		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &updated, &sealed.id, &sealed.vendor, &model, &wait, &sealed.keyID, &sealed.blob); err != nil {
 			return nil, fmt.Errorf("scan route target: %w", err)
 		}
 		route.Version = updated.UnixNano()
@@ -247,6 +251,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 		}
 		route.Targets = append(route.Targets, ResolvedTarget{
 			CredentialID: sealed.id.String(), Vendor: sealed.vendor, Model: model, Secret: secret,
+			FirstByteTimeout: seconds(wait),
 		})
 	}
 	if err := rows.Err(); err != nil {
