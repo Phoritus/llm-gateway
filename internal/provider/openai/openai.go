@@ -334,7 +334,7 @@ func classify(status int, parsed errorFields, detail string) *provider.Error {
 	switch {
 	case aboutContextLength(code, parsed.Type, parsed.Message):
 		return kind(provider.ErrContextTooLong)
-	case code == "insufficient_quota":
+	case code == "insufficient_quota" || parsed.Type == "insufficient_quota":
 		return kind(provider.ErrQuota)
 	case parsed.badGoogleKey():
 		return kind(provider.ErrAuth)

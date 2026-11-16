@@ -119,6 +119,10 @@ test-race: ## Run every test under the race detector (needs cgo)
 compat: ## Check the OpenAI SDK and Continue CLI against a running dev gateway
 	@scripts/compat.sh
 
+.PHONY: live
+live: ## Check the real provider adapters with the keys in .env.dev (needs make run)
+	@scripts/live.sh
+
 .PHONY: loadtest
 loadtest: ## Load /v1 against the mock: p50 under 10ms, memory bounded
 	@scripts/loadtest.sh
