@@ -115,6 +115,10 @@ test-int: ## Run every test, starting a throwaway Postgres and Redis
 test-race: ## Run every test under the race detector (needs cgo)
 	@scripts/test.sh race
 
+.PHONY: compat
+compat: ## Check the OpenAI SDK and Continue CLI against a running dev gateway
+	@scripts/compat.sh
+
 .PHONY: test-db-up
 test-db-up: ## Start the throwaway test Postgres on its own port
 	@scripts/test.sh db-up
