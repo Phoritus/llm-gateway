@@ -68,6 +68,7 @@ Day to day:
 | `make test-int` | Every test, starting a throwaway Postgres and Redis first |
 | `make test-race` | The same under the race detector (needs cgo and a C compiler) |
 | `make compat` | With `make run` going: the OpenAI Python SDK and the Continue CLI against the mock (needs `uv` and `npx`; each run adds a throwaway account to the dev database) |
+| `make loadtest` | Start a gateway on `LOAD_PORT` (18081) with the `/v1` limits raised, load `mock/echo` with vegeta at `LOAD_RATE` (100/s) for `LOAD_DURATION` (30s), streaming and not, and fail unless p50 is under 10ms and peak memory under 256 MB. Needs `deps-up` and `uv`, not `make run` |
 | `make env-secrets` | Fill in a missing or placeholder `MASTER_KEY`/`SESSION_SECRET` |
 | `make docker-build` | Build the container image |
 
