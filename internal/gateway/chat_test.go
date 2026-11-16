@@ -74,6 +74,18 @@ func (fakeRoutes) ResolveRoute(_ context.Context, workspaceID, alias string) (*s
 	return route, nil
 }
 
+var testAliasCreated = time.Unix(1_700_000_000, 0)
+
+func (fakeRoutes) RouteAliases(_ context.Context, workspaceID string) ([]store.RouteAlias, error) {
+	if workspaceID != "ws1" {
+		return nil, nil
+	}
+	return []store.RouteAlias{
+		{Alias: "fast", CreatedAt: testAliasCreated},
+		{Alias: renamedAlias, CreatedAt: testAliasCreated},
+	}, nil
+}
+
 // modelAndFirstByteWait splits "slow@50ms" into the model and its wait.
 func modelAndFirstByteWait(s string) (string, time.Duration) {
 	model, wait, _ := strings.Cut(s, "@")
@@ -106,6 +118,7 @@ func deps(p provider.Provider, timeout time.Duration) Deps {
 	return Deps{
 		Keys:      fakeKeys{},
 		Routes:    fakeRoutes{},
+		Aliases:   fakeRoutes{},
 		Providers: map[provider.Vendor]provider.Provider{provider.VendorMock: p},
 		Router:    router.New(router.NewMemory(), nil),
 		Usage:     &fakeUsage{},

@@ -49,7 +49,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `resolved` | 11 |
 | [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `resolved` | 13 |
-| [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `needs-triage` | - |
+| [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `resolved` | - |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -272,6 +272,14 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   carry. A per-account row's buckets drop the model from their id, so every
   `:free` model on one key draws on one allowance. Split it per limit when a
   vendor turns out to mix the two on one row.
+
+- Ticket 23 (`GET /v1/models`): built, because Open WebUI, JetBrains AI
+  Assistant's OpenAI-compatible provider and LibreChat fill their pickers from
+  it. It lists route aliases only, from `routes` alone, so neither a
+  credential nor an upstream model name is touched. It authenticates like
+  chat and spends one request, no tokens, from the key's and the workspace's
+  buckets; no usage event. The retrieve endpoint `GET /v1/models/{id}` waits
+  for a client that needs it.
 
 ## Fog
 

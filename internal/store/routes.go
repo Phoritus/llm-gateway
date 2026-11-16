@@ -279,6 +279,27 @@ func (s *Store) ListRoutes(ctx context.Context, workspaceID string) ([]Route, er
 	return routes, nil
 }
 
+// RouteAlias is a route as a gateway key's client may see it: the name it
+// sends as `model`, never the vendors and models behind it.
+type RouteAlias struct {
+	Alias     string
+	CreatedAt time.Time
+}
+
+// RouteAliases returns the workspace's route aliases, ordered by alias.
+func (s *Store) RouteAliases(ctx context.Context, workspaceID string) ([]RouteAlias, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT alias, created_at FROM routes WHERE workspace_id = $1 ORDER BY alias`, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list route aliases: %w", err)
+	}
+	aliases, err := pgx.CollectRows(rows, pgx.RowToStructByPos[RouteAlias])
+	if err != nil {
+		return nil, fmt.Errorf("list route aliases: %w", err)
+	}
+	return aliases, nil
+}
+
 // DeleteRoute removes a route and its targets, or returns ErrNotFound when the
 // workspace has no such route.
 func (s *Store) DeleteRoute(ctx context.Context, workspaceID, id string) error {

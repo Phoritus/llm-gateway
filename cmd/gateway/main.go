@@ -264,6 +264,7 @@ func run(logger *slog.Logger) error {
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      gatewayKeys,
 		Routes:    deps.Credentials,
+		Aliases:   st,
 		Providers: providers,
 		Router:    fallback,
 		Usage:     usageRecorder,

@@ -105,6 +105,11 @@ def main() -> int:
         expect(bool(resp.choices[0].message.content), "empty content")
         expect(resp.usage is not None and resp.usage.total_tokens > 0, f"usage {resp.usage!r}")
 
+    def models_list():
+        ids = [m.id for m in client.models.list()]
+        expect(sorted(ids) == sorted(MOCK_SCRIPT_BY_ALIAS), f"models are {ids!r}")
+        expect(not any(m.startswith("mock/") for m in ids), "the list names an upstream model")
+
     def raw_headers():
         raw = client.chat.completions.with_raw_response.create(model="compat-echo", messages=hello)
         expect(raw.headers.get("x-fallback-attempts") == "1", f"X-Fallback-Attempts {raw.headers.get('x-fallback-attempts')!r}")
@@ -176,6 +181,7 @@ def main() -> int:
         raise AssertionError("no error status on a stream that failed before its first chunk")
 
     check("non-streaming completion", non_streaming)
+    check("models.list names the route aliases", models_list)
     check("raw response headers", raw_headers)
     check("streaming completion", streaming)
     check("streaming with include_usage", stream_usage)

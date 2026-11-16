@@ -72,34 +72,52 @@ func (d Deps) reserve(w http.ResponseWriter, r *http.Request, key store.ActiveGa
 		{Scope: scopeKeyTokens, ID: key.ID, Rule: d.Limits.KeyTokens, Cost: estimate},
 		{Scope: scopeWorkspaceTokens, ID: key.WorkspaceID, Rule: d.Limits.WorkspaceTokens, Cost: estimate},
 	}
-	res, err := d.Limiter.Take(r.Context(), []ratelimit.Bucket{
+	switch d.take(w, r, key, tokens...) {
+	case refused:
+		return nil, false
+	case admittedUnlimited:
+		return nil, true
+	}
+	for i := range tokens {
+		tokens[i].Cost = min(tokens[i].Cost, tokens[i].Rule.Burst)
+	}
+	return tokens, true
+}
+
+type admission int
+
+const (
+	// refused means the 429 has been written.
+	refused admission = iota
+	admitted
+	// admittedUnlimited lets the request through with nothing spent, because
+	// the limiter failed.
+	admittedUnlimited
+)
+
+func (d Deps) take(w http.ResponseWriter, r *http.Request, key store.ActiveGatewayKey, tokens ...ratelimit.Bucket) admission {
+	res, err := d.Limiter.Take(r.Context(), append([]ratelimit.Bucket{
 		{Scope: scopeKeyRequests, ID: key.ID, Rule: d.Limits.KeyRequests, Cost: 1},
 		{Scope: scopeWorkspaceRequests, ID: key.WorkspaceID, Rule: d.Limits.WorkspaceRequests, Cost: 1},
-		tokens[0], tokens[1],
-	})
+	}, tokens...))
 	if err != nil {
 		d.logger().WarnContext(r.Context(), "rate limit check failed, request admitted",
 			slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
 			slog.String("error", err.Error()))
-		return nil, true
+		return admittedUnlimited
 	}
 
-	// OpenAI's header names, which its SDKs read. Each is the tighter of the
-	// key's and the workspace's bucket, since that is the one a client hits.
 	h := w.Header()
 	h.Set("X-RateLimit-Remaining-Requests", remaining(res.Remaining[0], res.Remaining[1]))
-	h.Set("X-RateLimit-Remaining-Tokens", remaining(res.Remaining[2], res.Remaining[3]))
+	if len(tokens) == 2 {
+		h.Set("X-RateLimit-Remaining-Tokens", remaining(res.Remaining[2], res.Remaining[3]))
+	}
 
 	if !res.Allowed {
 		tooManyRequests(w, res.RetryAfter)
-		return nil, false
+		return refused
 	}
-	for i := range tokens {
-		// Take clamps a cost to the burst, so that is what there is to settle
-		// against.
-		tokens[i].Cost = min(tokens[i].Cost, tokens[i].Rule.Burst)
-	}
-	return tokens, true
+	return admitted
 }
 
 // remaining formats the lower of two bucket levels. A bucket in debt reads as

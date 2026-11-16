@@ -21,8 +21,10 @@ const maxBodyBytes = 4 << 20
 
 // Deps is everything the data plane needs.
 type Deps struct {
-	Keys      KeyAuthenticator
-	Routes    RouteResolver
+	Keys   KeyAuthenticator
+	Routes RouteResolver
+	// Aliases answers GET /v1/models. Required.
+	Aliases   AliasLister
 	Providers map[provider.Vendor]provider.Provider
 	// Router tries the route's targets in turn. Required.
 	Router *router.Router
@@ -71,8 +73,8 @@ func (d Deps) logger() *slog.Logger {
 
 // Routes builds the /v1 handler. It expects the /v1 prefix stripped.
 func Routes(d Deps) http.Handler {
-	if d.Limiter == nil || d.ClientKey == nil || d.Router == nil || d.Usage == nil {
-		panic("gateway: Routes needs a Limiter, a ClientKey, a Router and a Usage recorder")
+	if d.Limiter == nil || d.ClientKey == nil || d.Router == nil || d.Usage == nil || d.Aliases == nil {
+		panic("gateway: Routes needs a Limiter, a ClientKey, a Router, a Usage recorder and Aliases")
 	}
 	d.inflight = &inflight{count: map[string]int{}}
 	d.blocks = &authBlocks{until: map[string]time.Time{}}
@@ -80,6 +82,7 @@ func Routes(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(routeTelemetry)
 	r.Post("/chat/completions", d.handleChatCompletions)
+	r.Get("/models", d.handleListModels)
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, typeNotFound, "not_found",
 			"The requested resource does not exist.")
