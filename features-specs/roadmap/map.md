@@ -48,7 +48,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [19](issues/19-provider-api-keys.md) | Create provider API keys on free tiers | `ready-for-human` | 03 |
 | [20](issues/20-windows-scan-exclusion.md) | Optional: stop the first-run stall on new Go binaries | `ready-for-human` | - |
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `resolved` | 11 |
-| [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `ready-for-agent` | 13 |
+| [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `resolved` | 13 |
 | [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `needs-triage` | - |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
@@ -241,7 +241,7 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   for Groq, Gemini and OpenRouter and holds only reported limits (null
   otherwise); Cerebras is unchecked and Mistral is now paid-only, so neither
   has rows. OpenRouter's 50 free requests a day are account-wide, so several
-  `:free` models on one key are over-counted as free.
+  `:free` models on one key were over-counted as free until ticket 22.
 
 - Ticket 17 (client compatibility): `make compat` checks the OpenAI Python
   SDK and the Continue CLI (the Continue IDE extensions' core) against a
@@ -265,6 +265,13 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   gateway's `attempt` now, not to each adapter. The router's 45s budget
   grows by the extra wait of each target it attempted, so a long-thinking
   first target does not cost the rest of the chain its time.
+
+- Ticket 22 (account-wide free limits): one boolean on the catalog row,
+  `per_account`, not a per-limit scope, because the only account-wide limit
+  known (OpenRouter's 50 free requests a day) is the only limit its rows
+  carry. A per-account row's buckets drop the model from their id, so every
+  `:free` model on one key draws on one allowance. Split it per limit when a
+  vendor turns out to mix the two on one row.
 
 ## Fog
 

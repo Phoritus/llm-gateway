@@ -121,6 +121,21 @@ func TestFreeQuotaIsCountedPerCredential(t *testing.T) {
 	wantOrder(t, tr.Prioritize(context.Background(), []store.ResolvedTarget{groq, other}, 10), other, groq)
 }
 
+func TestAnAccountWideTierIsSharedByEveryModelOnTheCredential(t *testing.T) {
+	gemma := store.ResolvedTarget{CredentialID: "c-or", Vendor: provider.VendorOpenRouter, Model: "gemma:free"}
+	nemo := store.ResolvedTarget{CredentialID: "c-or", Vendor: provider.VendorOpenRouter, Model: "nemo:free"}
+	otherKey := store.ResolvedTarget{CredentialID: "c-or-2", Vendor: provider.VendorOpenRouter, Model: "nemo:free"}
+	tr := tracker(t, ratelimit.NewLocal(), []store.FreeQuota{
+		{Vendor: "openrouter", Model: "gemma:free", RPD: limit(2), PerAccount: true},
+		{Vendor: "openrouter", Model: "nemo:free", RPD: limit(2), PerAccount: true},
+	})
+	spend(t, tr, gemma, 10)
+	spend(t, tr, gemma, 10)
+
+	targets := []store.ResolvedTarget{paid, nemo, otherKey}
+	wantOrder(t, tr.Prioritize(context.Background(), targets, 10), otherKey, paid, nemo)
+}
+
 func TestSpendingOnATargetWithNoTierCountsNothing(t *testing.T) {
 	local := ratelimit.NewLocal()
 	tr := tracker(t, local, freeTiers)
