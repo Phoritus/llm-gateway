@@ -218,6 +218,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
 		Keys:      deps.GatewayKeys,
 		Routes:    deps.Credentials,
+		Aliases:   st,
 		Providers: deps.Providers,
 		// In memory, so one test's failing targets are not skipped in the next.
 		Router:  router.New(router.NewMemory(), deps.Logger),

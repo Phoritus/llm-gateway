@@ -77,6 +77,51 @@ func TestV1KeysSeeOnlyTheirOwnWorkspacesRoutes(t *testing.T) {
 	}
 }
 
+func (e *testEnv) models(key string) (int, string) {
+	e.t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, e.server.URL+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
+}
+
+func TestV1ModelsListsOnlyTheKeysWorkspaceAliases(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	bob := env.signupAndLogin("bob@example.com")
+	aliceKey := env.mockRoute(alice, "alice-chat")
+	env.mockRoute(bob, "bobs-route")
+
+	status, body := env.models(aliceKey)
+	if status != http.StatusOK {
+		t.Fatalf("models: %d %s", status, body)
+	}
+	var list struct {
+		Object string `json:"object"`
+		Data   []struct {
+			ID      string `json:"id"`
+			Created int64  `json:"created"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Object != "list" || len(list.Data) != 1 || list.Data[0].ID != "alice-chat" {
+		t.Fatalf("alice's key lists %s, want alice-chat alone", body)
+	}
+	if age := time.Since(time.Unix(list.Data[0].Created, 0)); age < 0 || age > time.Minute {
+		t.Fatalf("created = %d, want the route's creation time", list.Data[0].Created)
+	}
+	if strings.Contains(body, "echo") {
+		t.Fatalf("the list names the upstream model: %s", body)
+	}
+}
+
 func TestV1RefusesAKeyWhoseOwnerIsUnverified(t *testing.T) {
 	env := newTestEnv(t)
 	c := env.newClient()
