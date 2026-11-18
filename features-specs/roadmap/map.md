@@ -40,7 +40,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [11](issues/11-router-fallback.md) | internal/router: fallback, skip rules, circuit breaker | `resolved` | 07, 10 |
 | [12](issues/12-usage-and-metrics.md) | Usage events, rollups and metrics (Gate A: free launch) | `resolved` | 11 |
 | [13](issues/13-free-first-and-cache.md) | Free-first routing and exact cache | `resolved` | 12 |
-| [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live) | `needs-triage` | 13 |
+| [14](issues/14-phase-2.md) | Phase 2 (Gate B: go live): split into [its own roadmap](../phase-2/map.md) | `resolved` | 13 |
 | [15](issues/15-delete-merged-branches.md) | Delete merged branches | `resolved` | 01 |
 | [16](issues/16-smtp-end-to-end.md) | Check real mail delivery before a production deploy | `ready-for-human` | - |
 | [17](issues/17-sdk-compat-check.md) | Compatibility check: the official OpenAI SDK and one IDE client | `resolved` | 06 |
@@ -50,6 +50,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `resolved` | 11 |
 | [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `resolved` | 13 |
 | [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `resolved` | - |
+| [24](issues/24-reset-password-page.md) | Serve the reset-password page the reset mail links to | `ready-for-agent` | - |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -280,6 +281,9 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   chat and spends one request, no tokens, from the key's and the workspace's
   buckets; no usage event. The retrieve endpoint `GET /v1/models/{id}` waits
   for a client that needs it.
+
+- Ticket 14 (Phase 2): split into [its own roadmap](../phase-2/map.md),
+  ordered towards Gate B, with the post-launch control-plane work after it.
 
 ## Fog
 
