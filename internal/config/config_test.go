@@ -162,32 +162,21 @@ func TestLoadRequiresAUsableMasterKey(t *testing.T) {
 	}
 }
 
-func TestLoadAllowsThePublicBaseURLOrigin(t *testing.T) {
+// An empty ALLOWED_ORIGINS is not a permissive default. The same-origin guard
+// refuses every state-changing request that carries an Origin, so a production
+// deployment with no list answers 403 to its own dashboard -- previously with
+// nothing in the loader's output to say why.
+func TestLoadRequiresAllowedOriginsInProduction(t *testing.T) {
 	env := productionEnv(t)
 	delete(env, "ALLOWED_ORIGINS")
-	env["PUBLIC_BASE_URL"] = "https://Gateway.Example.com"
 	apply(t, env)
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() = %v, want no error", err)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() = nil error, want a refusal")
 	}
-	if !cfg.AllowedOrigins.Allows("https://gateway.example.com") {
-		t.Errorf("Allows(public base origin) = false, AllowedOrigins = %v", cfg.AllowedOrigins)
-	}
-}
-
-func TestLoadKeepsExplicitOriginsBesideThePublicBaseURL(t *testing.T) {
-	apply(t, productionEnv(t))
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() = %v, want no error", err)
-	}
-	for _, origin := range []string{"https://dashboard.example.com", "https://gateway.example.com"} {
-		if !cfg.AllowedOrigins.Allows(origin) {
-			t.Errorf("Allows(%q) = false, AllowedOrigins = %v", origin, cfg.AllowedOrigins)
-		}
+	if !strings.Contains(err.Error(), "ALLOWED_ORIGINS") {
+		t.Errorf("error does not name ALLOWED_ORIGINS:\n%v", err)
 	}
 }
 
@@ -202,7 +191,7 @@ func TestLoadNormalizesAllowedOrigins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() = %v, want no error", err)
 	}
-	want := Origins{"https://dashboard.example.com", "https://admin.example.com", "https://gateway.example.com"}
+	want := Origins{"https://dashboard.example.com", "https://admin.example.com"}
 	if len(cfg.AllowedOrigins) != len(want) {
 		t.Fatalf("AllowedOrigins = %v, want %v", cfg.AllowedOrigins, want)
 	}
