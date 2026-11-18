@@ -75,8 +75,11 @@ func Key(workspaceID string, route *store.ResolvedRoute, req *provider.ChatReque
 // RequestCacheable reports whether a request's answer may be served from, and
 // stored in, the cache. A request that involves tools never is: its answer is
 // an instruction to act, and acting twice is not the same as acting once.
-func RequestCacheable(mode store.CacheMode, req *provider.ChatRequest) bool {
-	switch mode {
+func RequestCacheable(route *store.ResolvedRoute, req *provider.ChatRequest) bool {
+	if route.Settings.CacheOff {
+		return false
+	}
+	switch route.Cache {
 	case store.CacheAlways:
 	case store.CacheAuto:
 		if req.Temperature == nil || *req.Temperature != 0 {

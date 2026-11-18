@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -43,4 +45,57 @@ func lockWorkspaceForCap(ctx context.Context, tx pgx.Tx, workspaceID string) err
 		return fmt.Errorf("lock workspace: %w", err)
 	}
 	return nil
+}
+
+// WorkspaceSettings is the typed form of workspaces.settings. Every field's
+// zero value is its default, so a row written before a field existed, and a
+// ResolvedRoute built without settings, mean the defaults.
+type WorkspaceSettings struct {
+	// CacheOff turns caching off for every route in the workspace, whatever
+	// the route's own mode.
+	CacheOff bool `json:"cache_off,omitempty"`
+}
+
+func (s *Store) WorkspaceSettings(ctx context.Context, workspaceID string) (WorkspaceSettings, error) {
+	id, err := parseID(workspaceID)
+	if err != nil {
+		return WorkspaceSettings{}, err
+	}
+	var raw []byte
+	err = s.pool.QueryRow(ctx, `SELECT settings FROM workspaces WHERE id = $1`, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceSettings{}, ErrNotFound
+	}
+	if err != nil {
+		return WorkspaceSettings{}, fmt.Errorf("select workspace settings: %w", err)
+	}
+	return parseSettings(raw)
+}
+
+// SetWorkspaceSettings replaces a workspace's settings.
+func (s *Store) SetWorkspaceSettings(ctx context.Context, workspaceID string, in WorkspaceSettings) error {
+	id, err := parseID(workspaceID)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("encode workspace settings: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE workspaces SET settings = $2 WHERE id = $1`, id, raw)
+	if err != nil {
+		return fmt.Errorf("update workspace settings: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func parseSettings(raw []byte) (WorkspaceSettings, error) {
+	var out WorkspaceSettings
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return WorkspaceSettings{}, fmt.Errorf("decode workspace settings: %w", err)
+	}
+	return out, nil
 }
