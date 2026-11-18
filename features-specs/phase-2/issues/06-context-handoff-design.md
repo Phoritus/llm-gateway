@@ -1,7 +1,7 @@
 # 06 Context handoff: what it is
 
 Type: grilling
-Status: needs-triage
+Status: needs-info
 Blocked by: -
 
 The spec names context handoff only as a Phase 2 feature, opt-in per route,
@@ -24,3 +24,45 @@ before any code:
 The answers become ticket 07's scope.
 
 ## Comments
+
+- 2026-11-18, the owner: handoff is for an IDE or any app whose conversation
+  outgrows a model's context window, or whose big-window model is rate
+  limited: the gateway should hand the conversation to another target in a
+  form that fits, so the client keeps working unchanged. Research the best
+  real-world approach, improve on it, reuse open source where it fits, and
+  prove it.
+
+## Answer (proposed, waiting on the owner's decisions)
+
+Research with sources: [research.md](../context-handoff/research.md). Proof:
+its last section and [prototype/](../context-handoff/prototype/).
+
+What breaks today is failover, not session memory: a context-too-long error
+only skips the same model, so a long conversation fails when every remaining
+target has a smaller window. Chat Completions sends the whole conversation
+every turn, so handoff can be stateless, and the spec's `sess:` key (stored
+prompt text) is not needed.
+
+Proposed design, per target, inside the router's pre-first-byte loop:
+
+1. Reorder targets so those whose known window fits go first. Loses nothing.
+2. On routes that opt in, fit the conversation to the chosen target: keep the
+   system prompt, the tools, the first user message and the final turn; clear
+   old tool results (keeping the newest 3); drop whole middle units, never
+   splitting a tool call from its results, behind one marker message. If what
+   must be kept does not fit, the client gets the existing context error.
+3. Summarising the dropped middle with another model call: left out for now.
+
+Triggered before the call when the target's window is known, and on a
+context-too-long error by retrying that target once, fitted to the limit the
+error states. Windows are learned from those errors and kept in Redis as
+numbers only. Every changed request is announced (`X-Context-Handoff`, the
+fallback trail, the usage event), and an answer to a fitted request is never
+cached under the original request's key.
+
+Rejected: LiteLLM's `trim_messages` (leaves gaps, breaks tool pairs, drops
+the shortened system message), LLMLingua (Python and a model), vendor
+compaction (one vendor each, needs a window that already fits) and dropping
+the oldest messages (orphans tool results, loses the task: see the proof).
+
+Waiting on the owner: the open questions at the end of research.md.
