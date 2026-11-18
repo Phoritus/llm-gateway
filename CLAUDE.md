@@ -25,8 +25,9 @@ adding files.
 | `quota` | Free-first routing. `Catalog` holds `free_quota_catalog` in memory, keyed by vendor and model, reloaded every 10 minutes; a failed load keeps the previous one. `Tracker.Spend` counts an answer against its credential-and-model buckets, or its credential's alone when the row is `per_account` (OpenRouter's `:free` models share one daily allowance) (`free:rpm`, `free:rpd`, `free:tpm`, `free:tpd`; daily ones live 25h) and `Tracker.Prioritize` moves the targets with a catalog entry and room left to the front, keeping the route's order within each group. Exhausted free targets are demoted, never dropped |
 
 Build-order steps 1 to 7 are done, which is the whole Phase 1 build order. **The work left is
-an ordered ticket list in `features-specs/roadmap/map.md`** -- read it at the
-start of a session and take the next unblocked ticket. The step 2 design is in
+an ordered ticket list in `features-specs/roadmap/map.md`, and Phase 2's in
+`features-specs/phase-2/map.md`** -- read both at the start of a session and
+take the next unblocked ticket, finishing the first map's before Phase 2's. The step 2 design is in
 `features-specs/mock-provider-v1/design.md`, and the free-first and exact cache
 design in `features-specs/free-first-and-cache/design.md`.
 
