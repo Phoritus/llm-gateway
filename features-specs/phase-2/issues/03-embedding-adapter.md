@@ -1,7 +1,7 @@
 # 03 Embedding adapter
 
 Type: task
-Status: ready-for-agent
+Status: claimed
 Blocked by: 02
 
 One interface with interchangeable clients, as the spec says, for the
