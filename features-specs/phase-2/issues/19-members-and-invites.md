@@ -1,7 +1,7 @@
 # 19 Workspace members, invites and the role column
 
 Type: grilling
-Status: needs-triage
+Status: wontfix
 Blocked by: -
 
 CLAUDE.md records why there are no roles yet: a workspace has one member.
@@ -13,3 +13,7 @@ accepted, and whether one user may belong to several workspaces, which
 changes what a session is created against.
 
 ## Comments
+
+- 2026-11-18, the owner: not needed. Cut it, to keep the product to its core.
+  A workspace stays single-member, and CLAUDE.md's "no roles" decision
+  stands. Reopen if invites are ever wanted.

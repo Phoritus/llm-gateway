@@ -56,8 +56,8 @@ point), `grilling` needs the user's decisions before anything is built,
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `ready-for-agent` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `ready-for-agent` | - |
 | [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `ready-for-agent` | 04 |
-| [18](issues/18-budgets.md) | Budgets | grilling | `needs-triage` | 04 |
-| [19](issues/19-members-and-invites.md) | Workspace members, invites and the role column | grilling | `needs-triage` | - |
+| [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `ready-for-agent` | 04 |
+| [19](issues/19-members-and-invites.md) | ~~Workspace members, invites and the role column~~ (cut) | grilling | `wontfix` | - |
 
 01, 02, 04 and 08 can run in parallel, and so can 15 and 16 at any time.
 07 depends on what 06 decides, so its scope is not settled yet.
@@ -78,6 +78,13 @@ point), `grilling` needs the user's decisions before anything is built,
   behind a marker; tool pairs never split). No `sess:` key, no summarising
   call yet. Proved by a prototype over 2,000 generated sessions; see
   [research.md](context-handoff/research.md). Waiting on the owner's answers.
+
+- Ticket 18 (budgets), the owner's decision: money, not tokens, as other
+  gateways do; per workspace and per gateway key; block or warn chosen per
+  budget, block by default. A price table beside `free_quota_catalog` is
+  part of the ticket.
+- Ticket 19 (members and invites): cut by the owner to keep to the core.
+  Workspaces stay single-member and there are no roles.
 
 ## Fog
 
