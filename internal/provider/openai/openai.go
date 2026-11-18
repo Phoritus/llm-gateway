@@ -401,3 +401,48 @@ func truncate(b []byte) string {
 	}
 	return strings.ToValidUTF8(string(b), "?")
 }
+
+// maxEmbedBody bounds an embeddings answer: 3072 floats is about 40 KiB of
+// JSON, so 1 MiB only ever cuts off a misbehaving upstream.
+const maxEmbedBody = 1 << 20
+
+func (p *Provider) Embed(ctx context.Context, req *provider.EmbedRequest, cred provider.Credential) (*provider.EmbedResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "encode request: " + err.Error()}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint.BaseURL+"/embeddings", bytes.NewReader(payload))
+	if err != nil {
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+cred.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, callError(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, statusError(resp)
+	}
+
+	var out struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+		Usage struct {
+			PromptTokens int `json:"prompt_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxEmbedBody)).Decode(&out); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "malformed embeddings answer: " + err.Error()}
+	}
+	if len(out.Data) != 1 {
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: fmt.Sprintf("embeddings answer holds %d items, want 1", len(out.Data))}
+	}
+	return &provider.EmbedResponse{Vector: out.Data[0].Embedding, PromptTokens: out.Usage.PromptTokens}, nil
+}

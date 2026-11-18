@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"hash/fnv"
 	"io"
 	"strings"
 	"time"
+	"unicode"
 
 	"llm-gateway/internal/provider"
 )
@@ -206,4 +208,52 @@ func randomHex() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// ModelEmbed is the mock's embedding model. Embed also honours ModelFail,
+// ModelRateLimited and ModelSlow.
+const ModelEmbed = "embed"
+
+const defaultEmbedDimensions = 8
+
+// Embed returns a bag-of-words vector: each lowercase word of letters and
+// digits is hashed into one of Dimensions buckets and counted. The same text
+// always gives the same vector, and texts that share words score a high
+// cosine, which is what a semantic cache test needs.
+func (p *Provider) Embed(ctx context.Context, req *provider.EmbedRequest, _ provider.Credential) (*provider.EmbedResponse, error) {
+	switch strings.TrimPrefix(req.Model, "mock/") {
+	case ModelFail:
+		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "mock failure"}
+	case ModelRateLimited:
+		return nil, &provider.Error{Kind: provider.ErrRateLimited, RetryAfter: RateLimitRetryAfter, Detail: "mock rate limit"}
+	case ModelSlow:
+		delay := p.Delay
+		if delay == 0 {
+			delay = 200 * time.Millisecond
+		}
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-t.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	dims := req.Dimensions
+	if dims == 0 {
+		dims = defaultEmbedDimensions
+	}
+	vec := make([]float32, dims)
+	for _, w := range strings.FieldsFunc(strings.ToLower(req.Input), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(w))
+		vec[h.Sum32()%uint32(dims)]++
+	}
+	return &provider.EmbedResponse{Vector: vec, PromptTokens: estimateTokens(len(req.Input))}, nil
 }
