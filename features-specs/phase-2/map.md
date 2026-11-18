@@ -35,7 +35,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | --- | --- | --- | --- | --- |
 | **Semantic cache** | | | | |
 | [01](issues/01-vector-search-on-redis.md) | Vector search on Redis: which Redis, which index shape | research | `resolved` | - |
-| [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `ready-for-agent` | - |
+| [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `resolved` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `ready-for-agent` | 02 |
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `ready-for-agent` | - |
 | [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline | task | `ready-for-agent` | 01, 03, 04 |
@@ -76,6 +76,15 @@ point), `grilling` needs the user's decisions before anything is built,
   A count cap evicts the oldest in one Lua script with `vecage:` and
   `vecans:`, and the cosine threshold `c` is `EPSILON (1 - c) / 2`. See
   [research.md](vector-search/research.md).
+
+- Ticket 02 (embedding providers): `gemini-embedding-2` at 1024 dimensions
+  through the workspace's Gemini credential is the default family; OpenRouter's
+  `google/gemini-embedding-2` is its in-family failover, and `bge-m3` the
+  second family. Every endpoint speaks OpenAI's `POST /embeddings` with
+  `dimensions`, so ticket 03 needs one client keyed by base URL. No credential
+  for a family means no semantic cache; no local model on the VPS. Thresholds
+  are per family, since nothing reached 0.95. See
+  [research.md](embeddings/research.md).
 
 - Ticket 06 (context handoff), decided: stateless, inside the router's
   pre-first-byte loop, with no `sess:` key and no summarising call. Every
