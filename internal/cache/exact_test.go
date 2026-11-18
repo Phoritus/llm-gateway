@@ -134,9 +134,16 @@ func TestRequestCacheable(t *testing.T) {
 		{"an assistant message with null tool_calls", store.CacheAlways,
 			`{"messages":[{"role":"assistant","content":"hello","tool_calls":null},{"role":"user","content":"hi"}]}`, true},
 	} {
-		if got := RequestCacheable(tc.mode, request(t, tc.body)); got != tc.want {
+		if got := RequestCacheable(&store.ResolvedRoute{Cache: tc.mode}, request(t, tc.body)); got != tc.want {
 			t.Errorf("%s: cacheable = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestAWorkspaceWithCachingOffCachesNothing(t *testing.T) {
+	route := &store.ResolvedRoute{Cache: store.CacheAlways, Settings: store.WorkspaceSettings{CacheOff: true}}
+	if RequestCacheable(route, request(t, `{"messages":[{"role":"user","content":"hi"}],"temperature":0}`)) {
+		t.Fatal("a route set to always was cached in a workspace that turned caching off")
 	}
 }
 

@@ -37,7 +37,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [01](issues/01-vector-search-on-redis.md) | Vector search on Redis: which Redis, which index shape | research | `resolved` | - |
 | [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `resolved` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `resolved` | 02 |
-| [04](issues/04-workspace-settings.md) | Workspace settings API | task | `ready-for-agent` | - |
+| [04](issues/04-workspace-settings.md) | Workspace settings API | task | `resolved` | - |
 | [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline | task | `ready-for-agent` | 01, 03, 04 |
 | **Context handoff** | | | | |
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
@@ -92,6 +92,12 @@ point), `grilling` needs the user's decisions before anything is built,
   Failover is ordered credentials under one deadline for the whole call, with
   no skip state or breaker: a failure is a miss, so the router's machinery
   would buy nothing. Vectors are normalised here, never trusted.
+
+- Ticket 04 (workspace settings): `GET`/`PUT /api/workspace/settings`, a
+  flat document replaced whole (`cache_enabled` today). Settings ride on
+  `ResolveRoute`'s query, so a change applies to the next request, and
+  `cache.RequestCacheable` takes the resolved route so it still decides alone.
+  Stored fields default at their zero value.
 
 - Ticket 06 (context handoff), decided: stateless, inside the router's
   pre-first-byte loop, with no `sess:` key and no summarising call. Every

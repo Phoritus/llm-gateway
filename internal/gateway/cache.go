@@ -60,7 +60,7 @@ func (d Deps) lookupCache(r *http.Request, workspaceID string, route *store.Reso
 	if d.Cache == nil {
 		return cacheLookup{}
 	}
-	if !cache.RequestCacheable(route.Cache, req) {
+	if !cache.RequestCacheable(route, req) {
 		countCache(cacheSkipped)
 		return cacheLookup{}
 	}

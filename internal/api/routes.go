@@ -123,6 +123,9 @@ func Routes(d Deps) http.Handler {
 			r.Delete("/routes/{id}", d.handleDeleteRoute)
 
 			r.Get("/usage", d.handleUsage)
+
+			r.Get("/workspace/settings", d.handleGetWorkspaceSettings)
+			r.Put("/workspace/settings", d.handlePutWorkspaceSettings)
 		})
 	})
 
