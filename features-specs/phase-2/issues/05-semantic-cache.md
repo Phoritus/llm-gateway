@@ -21,3 +21,5 @@ hit.
 Spec: [Caching and embeddings](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+- 2026-11-18: ticket 01 settled the index: vector sets, one key per workspace and model, Q8, oldest-first eviction in one Lua script. Left open here: the cap's size and unit, LRU or insertion order, and when an old model's key is removed. See [research.md](../vector-search/research.md).
