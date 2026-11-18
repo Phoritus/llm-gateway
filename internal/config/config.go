@@ -333,15 +333,8 @@ func Load() (*Config, error) {
 		// on the path, which defeats the point of mailing it rather than
 		// showing it.
 		fail("PUBLIC_BASE_URL must use https when APP_ENV is %q, got %q", EnvProduction, cfg.PublicBaseURL)
-	}
-
-	// The reset-password page is served from this origin and posts back to it,
-	// so it must pass the same-origin guard without the deploy listing it again.
-	// ALLOWED_ORIGINS therefore names only additional origins.
-	if u, err := url.Parse(cfg.PublicBaseURL); err == nil && u.Host != "" {
-		if origin := normalizeOrigin(u.Scheme + "://" + u.Host); !slices.Contains(cfg.AllowedOrigins, origin) {
-			cfg.AllowedOrigins = append(cfg.AllowedOrigins, origin)
-		}
+	} else if origin := normalizeOrigin(u.Scheme + "://" + u.Host); !slices.Contains(cfg.AllowedOrigins, origin) {
+		cfg.AllowedOrigins = append(cfg.AllowedOrigins, origin)
 	}
 
 	// The SDK reads this variable again by itself, untrimmed, and on a value it

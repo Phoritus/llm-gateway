@@ -42,14 +42,11 @@
     show('', '');
     button.disabled = true;
 
-    // Under this page's no-referrer policy a POST carries "Origin: null", which
-    // the same-origin guard refuses; strict-origin sends the real origin only.
     fetch('/api/auth/reset-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: token, password: password.value }),
-      credentials: 'same-origin',
-      referrerPolicy: 'strict-origin'
+      credentials: 'same-origin'
     }).then(function (response) {
       if (response.ok) {
         finish('Your password has been changed. Sign in with your new password.', 'ok');

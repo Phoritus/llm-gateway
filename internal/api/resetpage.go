@@ -11,8 +11,6 @@ import (
 //go:embed resetpage/index.html resetpage/page.js resetpage/page.css
 var resetPageFiles embed.FS
 
-// resetPage is rendered once. The CSP names the hash of each inlined block, so
-// the page runs with no external resource and no 'unsafe-inline'.
 var resetPage = buildResetPage()
 
 type builtPage struct {
@@ -26,7 +24,9 @@ func buildResetPage() builtPage {
 		if err != nil {
 			panic(err)
 		}
-		return string(b)
+		// A browser hashes an inline block after HTML parsing has turned CRLF
+		// into LF, so a CRLF checkout would otherwise serve a CSP that blocks it.
+		return strings.ReplaceAll(string(b), "\r\n", "\n")
 	}
 	script, style := read("page.js"), read("page.css")
 	html := strings.NewReplacer(
@@ -45,9 +45,7 @@ func buildResetPage() builtPage {
 	}
 }
 
-// ResetPasswordPage mounts the page the password-reset mail links to, at the
-// server root because it is a browser page and not part of the /api surface.
-// The token arrives in the query string, hence no-referrer and no-store.
+// ResetPasswordPage mounts the page the password-reset mail links to.
 func ResetPasswordPage(mux *http.ServeMux) {
 	mux.HandleFunc("GET /reset-password", func(w http.ResponseWriter, _ *http.Request) {
 		h := w.Header()

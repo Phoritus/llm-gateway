@@ -162,8 +162,6 @@ func TestLoadRequiresAUsableMasterKey(t *testing.T) {
 	}
 }
 
-// The reset-password page is served from PUBLIC_BASE_URL and posts back to it,
-// so that origin is always allowed and ALLOWED_ORIGINS may be empty.
 func TestLoadAllowsThePublicBaseURLOrigin(t *testing.T) {
 	env := productionEnv(t)
 	delete(env, "ALLOWED_ORIGINS")

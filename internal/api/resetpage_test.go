@@ -38,6 +38,9 @@ func TestResetPasswordPageIsServedUnderACSPThatCoversItsInlineCode(t *testing.T)
 	}
 
 	body := rec.Body.String()
+	if strings.Contains(body, "\r") {
+		t.Fatal("page carries a CR, so the browser's hash of an inline block differs from the CSP's")
+	}
 	for _, tag := range []string{"script", "style"} {
 		blocks := regexp.MustCompile(`(?s)<`+tag+`>(.*?)</`+tag+`>`).FindAllStringSubmatch(body, -1)
 		if len(blocks) == 0 {
