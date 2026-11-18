@@ -387,9 +387,16 @@ include it. `cd prototype && go test -v ./...` runs three tests:
 ## Open questions for the owner
 
 1. **Silent trimming versus refusing.** Trimming loses information the user sent. Is answering with an `X-Context-Handoff` header and a marker message acceptable, or should trimming require a client opt-in (a request header) on top of the route opt-in?
+   *Owner: the header and the route opt-in are enough. (2026-11-18)*
 2. **Defaults.** Should reorder-by-window be on for every route (it loses nothing), with trimming opt-in only?
+   *Owner: yes, `reorder` by default on every route, `trim` opt-in. (2026-11-18)*
 3. **Summarisation.** Is an extra upstream call that spends the user's quota and adds latency to time-to-first-token wanted at all? If so, which target summarises: the route's first, its cheapest, or a configured one?
+   *Owner: not now. (2026-11-18)*
 4. **The `sess:` key.** May the spec's Data model row be removed in favour of the stateless design? Is sticky routing (no prompt text) wanted as its own ticket?
+   *Owner: remove it. (2026-11-18)*
 5. **413 or 400 for context exhaustion.** Keep the spec's 413, or switch to OpenAI's 400 shape so more clients (for example Roo Code) self-recover? Whichever status is chosen, the message can include the learned limit.
+   *Owner: 400, with the learned limit in the message. (2026-11-18)*
 6. **Window catalogue.** Should the gateway ship a window catalogue seeded from OpenRouter and LiteLLM data, with the tier caveat, or rely only on learned windows and per-target overrides?
+   *Owner: both, learned windows first. (2026-11-18)*
 7. **First user message.** Is keeping the first user message (the task statement) right for the main use? In long IDE sessions it can be stale.
+   *Owner: rejected; the first user message is not pinned. (2026-11-18)*
