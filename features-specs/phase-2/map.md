@@ -34,7 +34,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | # | Work | Type | Status | Blocked by |
 | --- | --- | --- | --- | --- |
 | **Semantic cache** | | | | |
-| [01](issues/01-vector-search-on-redis.md) | Vector search on Redis: which Redis, which index shape | research | `ready-for-agent` | - |
+| [01](issues/01-vector-search-on-redis.md) | Vector search on Redis: which Redis, which index shape | research | `resolved` | - |
 | [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `ready-for-agent` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `ready-for-agent` | 02 |
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `ready-for-agent` | - |
@@ -69,6 +69,13 @@ point), `grilling` needs the user's decisions before anything is built,
   credentials, not by a platform key: bring-your-own-key means the platform
   pays no token costs, and an embedding is a token cost. Ticket 02 checks it
   can be done on free tiers.
+
+- Ticket 01 (vector search): Redis 8 Open Source under AGPLv3, unpatched.
+  Vector sets, one key per workspace and model (`vec:{workspace}:{family}:{dim}`),
+  so tenant isolation is the key, not a filter. Q8 at about 1.8 KB an entry.
+  A count cap evicts the oldest in one Lua script with `vecage:` and
+  `vecans:`, and the cosine threshold `c` is `EPSILON (1 - c) / 2`. See
+  [research.md](vector-search/research.md).
 
 - Ticket 06 (context handoff), decided: stateless, inside the router's
   pre-first-byte loop, with no `sess:` key and no summarising call. Every

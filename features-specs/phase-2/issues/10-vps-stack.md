@@ -16,3 +16,5 @@ its own env file, which the scripts refuse to open locally, as with
 `.env.prod` today.
 
 ## Comments
+
+- 2026-11-18: ticket 01: run the stock `redis:8-alpine`, pinned to a minor version (the prototype ran 8.10.3), unmodified, since the AGPLv3 duty is triggered only by patching it. See [research.md](../vector-search/research.md).
