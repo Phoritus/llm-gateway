@@ -14,3 +14,5 @@ miss. A mock embedder for tests, the way `provider/mock` serves chat.
 The spec's code layout puts embedding adapters in `cache/`.
 
 ## Comments
+
+- 2026-11-18: ticket 02 answered which embedders: see [research.md](../embeddings/research.md) and its open questions for this ticket.
