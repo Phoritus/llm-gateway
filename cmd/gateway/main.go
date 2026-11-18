@@ -226,6 +226,7 @@ func run(logger *slog.Logger) error {
 		{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
 	}
 	api.Health(logger, checks...)(mux)
+	api.ResetPasswordPage(mux)
 	if err := st.RegisterMetrics(); err != nil {
 		return err
 	}
