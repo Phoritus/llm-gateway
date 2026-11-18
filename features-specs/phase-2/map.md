@@ -40,8 +40,8 @@ point), `grilling` needs the user's decisions before anything is built,
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `ready-for-agent` | - |
 | [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline | task | `ready-for-agent` | 01, 03, 04 |
 | **Context handoff** | | | | |
-| [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `needs-info` | - |
-| [07](issues/07-context-handoff.md) | Context handoff | task | `needs-triage` | 06 |
+| [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
+| [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
 | **Custom endpoints** | | | | |
 | [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `ready-for-agent` | - |
 | [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `ready-for-agent` | 08 |
@@ -60,7 +60,6 @@ point), `grilling` needs the user's decisions before anything is built,
 | [19](issues/19-members-and-invites.md) | ~~Workspace members, invites and the role column~~ (cut) | grilling | `wontfix` | - |
 
 01, 02, 04 and 08 can run in parallel, and so can 15 and 16 at any time.
-07 depends on what 06 decides, so its scope is not settled yet.
 
 ## Decisions so far
 
@@ -71,13 +70,15 @@ point), `grilling` needs the user's decisions before anything is built,
   pays no token costs, and an embedding is a token cost. Ticket 02 checks it
   can be done on free tiers.
 
-- Ticket 06 (context handoff), proposed: stateless, inside the router's
-  pre-first-byte loop. Reorder targets by known window, then, on routes that
-  opt in, fit the conversation deterministically (system, tools, task and
-  final turn kept; old tool results cleared; whole middle units dropped
-  behind a marker; tool pairs never split). No `sess:` key, no summarising
-  call yet. Proved by a prototype over 2,000 generated sessions; see
-  [research.md](context-handoff/research.md). Waiting on the owner's answers.
+- Ticket 06 (context handoff), decided: stateless, inside the router's
+  pre-first-byte loop, with no `sess:` key and no summarising call. Every
+  route reorders targets by known window by default; a route set to `trim`
+  also fits the conversation (system, tools and final turn kept, the first
+  user message not pinned; old tool results cleared; whole middle units
+  dropped behind a marker; tool pairs never split), announced in
+  `X-Context-Handoff`. Windows are learned from errors, with a seeded
+  catalogue as the guess. Exhaustion becomes 400 `context_length_exceeded`.
+  See [research.md](context-handoff/research.md) and ticket 06.
 
 - Ticket 18 (budgets), the owner's decision: money, not tokens, as other
   gateways do; per workspace and per gateway key; block or warn chosen per

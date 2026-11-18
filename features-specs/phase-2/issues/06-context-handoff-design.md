@@ -1,7 +1,7 @@
 # 06 Context handoff: what it is
 
 Type: grilling
-Status: needs-info
+Status: resolved
 Blocked by: -
 
 The spec names context handoff only as a Phase 2 feature, opt-in per route,
@@ -31,8 +31,22 @@ The answers become ticket 07's scope.
   form that fits, so the client keeps working unchanged. Research the best
   real-world approach, improve on it, reuse open source where it fits, and
   prove it.
+- 2026-11-18, the owner decided:
+  1. Trimming announced in `X-Context-Handoff` is enough; the route opt-in
+     suffices and clients need not opt in.
+  2. Reorder-by-window is on for every route by default; trimming is opt-in.
+     Per-route `context_handoff: off | reorder | trim`, default `reorder`,
+     under the global `CONTEXT_HANDOFF` switch.
+  3. No summarising model call for now.
+  4. Drop the spec's `sess:{workspace}:{session}` key: handoff is stateless.
+  5. Context exhaustion answers 400 `context_length_exceeded` (OpenAI's
+     shape), not 413, with the learned limit in the message.
+  6. Windows: learned from vendor errors first, a catalogue seeded from
+     OpenRouter and LiteLLM data as the starting guess.
+  7. Rejected: the first user message is not pinned; it may be dropped like
+     any other middle message.
 
-## Answer (proposed, waiting on the owner's decisions)
+## Answer
 
 Research with sources: [research.md](../context-handoff/research.md). Proof:
 its last section and [prototype/](../context-handoff/prototype/).
@@ -43,11 +57,11 @@ target has a smaller window. Chat Completions sends the whole conversation
 every turn, so handoff can be stateless, and the spec's `sess:` key (stored
 prompt text) is not needed.
 
-Proposed design, per target, inside the router's pre-first-byte loop:
+Design, per target, inside the router's pre-first-byte loop:
 
 1. Reorder targets so those whose known window fits go first. Loses nothing.
 2. On routes that opt in, fit the conversation to the chosen target: keep the
-   system prompt, the tools, the first user message and the final turn; clear
+   system and developer messages, the tools and the final turn; clear
    old tool results (keeping the newest 3); drop whole middle units, never
    splitting a tool call from its results, behind one marker message. If what
    must be kept does not fit, the client gets the existing context error.
@@ -65,4 +79,4 @@ the shortened system message), LLMLingua (Python and a model), vendor
 compaction (one vendor each, needs a window that already fits) and dropping
 the oldest messages (orphans tool results, loses the task: see the proof).
 
-Waiting on the owner: the open questions at the end of research.md.
+The owner's answers to research.md's open questions are above.
