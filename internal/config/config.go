@@ -205,6 +205,14 @@ func Load() (*Config, error) {
 		}
 		cfg.AllowedOrigins = append(cfg.AllowedOrigins, origin)
 	}
+	// An empty list is not a permissive default: the same-origin guard refuses
+	// every state-changing request carrying an Origin, so the control plane
+	// answers 403 to its own dashboard while the loader says nothing. In
+	// development that is survivable, because a request with no Origin header
+	// at all -- curl, the test client -- still passes.
+	if len(cfg.AllowedOrigins) == 0 && cfg.Env == EnvProduction {
+		fail("ALLOWED_ORIGINS is required when APP_ENV is %q, because an empty list refuses every browser request that changes state", EnvProduction)
+	}
 
 	// Rate-limit buckets are keyed on the client address, so whether
 	// X-Forwarded-For may be believed is a security decision and not a
@@ -333,8 +341,6 @@ func Load() (*Config, error) {
 		// on the path, which defeats the point of mailing it rather than
 		// showing it.
 		fail("PUBLIC_BASE_URL must use https when APP_ENV is %q, got %q", EnvProduction, cfg.PublicBaseURL)
-	} else if origin := normalizeOrigin(u.Scheme + "://" + u.Host); !slices.Contains(cfg.AllowedOrigins, origin) {
-		cfg.AllowedOrigins = append(cfg.AllowedOrigins, origin)
 	}
 
 	// The SDK reads this variable again by itself, untrimmed, and on a value it

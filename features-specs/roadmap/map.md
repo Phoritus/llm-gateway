@@ -50,7 +50,7 @@ without the chat that produced it. Read this first, then the ticket you take.
 | [21](issues/21-per-route-first-byte-timeout.md) | Per-route first-byte timeout | `resolved` | 11 |
 | [22](issues/22-account-wide-free-limits.md) | Free-tier limits counted per account (OpenRouter) | `resolved` | 13 |
 | [23](issues/23-v1-models.md) | `GET /v1/models`: list the workspace's route aliases | `resolved` | - |
-| [24](issues/24-reset-password-page.md) | Serve the reset-password page the reset mail links to | `resolved` | - |
+| [24](issues/24-reset-password-page.md) | Serve the reset-password page the reset mail links to | `ready-for-agent` | - |
 
 Tickets 02 and 04 can run in parallel, and 18 can run at any time.
 
@@ -281,14 +281,6 @@ Tickets 02 and 04 can run in parallel, and 18 can run at any time.
   chat and spends one request, no tokens, from the key's and the workspace's
   buckets; no usage event. The retrieve endpoint `GET /v1/models/{id}` waits
   for a client that needs it.
-
-- Ticket 24 (reset-password page): the gateway serves `GET /reset-password`
-  itself, one embedded page under a CSP of its own inline hashes and
-  `no-referrer`, until a dashboard takes the path over. `PUBLIC_BASE_URL`'s
-  origin is always allowed by the same-origin guard, so `ALLOWED_ORIGINS` is
-  no longer required in production. `no-referrer` does not strip the POST's
-  Origin: the Fetch spec's `Origin: null` rule skips `cors`-mode requests,
-  which a plain `fetch` is.
 
 - Ticket 14 (Phase 2): split into [its own roadmap](../phase-2/map.md),
   ordered towards Gate B, with the post-launch control-plane work after it.
