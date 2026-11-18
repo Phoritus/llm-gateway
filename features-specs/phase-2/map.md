@@ -2,8 +2,8 @@
 
 The ordered list of Phase 2 work, split out of roadmap ticket 14 on
 2026-11-18. Phase 1 (build order steps 1 to 7) is
-[the first roadmap](../roadmap/map.md); its open tickets 16 (real mail) and 24
-(the reset-password page) block go-live here too.
+[the first roadmap](../roadmap/map.md); its open ticket 16 (real mail) blocks
+go-live here too.
 
 Phase 2 per the spec: the semantic cache, context handoff, the move to one
 VPS, Prometheus and Grafana there, and custom endpoints behind an SSRF guard.
@@ -27,7 +27,7 @@ update the state table in CLAUDE.md.
 A `Type:` line says what kind of ticket it is: `research` answers a question
 and writes the answer down (a prototype is fine, merged code is not the
 point), `grilling` needs the user's decisions before anything is built,
-`task` builds something. `R16` and `R24` name tickets in the first roadmap.
+`task` builds something. `R16` names a ticket in the first roadmap.
 
 ## Tickets
 
@@ -51,7 +51,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [12](issues/12-prometheus-grafana.md) | Prometheus, Grafana and alerts on the VPS | task | `ready-for-agent` | 10 |
 | [13](issues/13-cutover.md) | Cut over from Render, Neon and Upstash | task | `ready-for-human` | 11, 12 |
 | **Gate B** | | | | |
-| [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 13, R16, R24 |
+| [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 13, R16 |
 | **After Gate B** | | | | |
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `ready-for-agent` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `ready-for-agent` | - |
@@ -97,8 +97,9 @@ point), `grilling` needs the user's decisions before anything is built,
 ## Fog
 
 - The Anthropic-native endpoint: the spec says "later", after Phase 2.
-- The dashboard frontend is out of the backend spec's scope. Ticket R24
-  serves the reset-password page from the gateway until it exists.
+- The dashboard frontend, the reset-password page included, lives in its
+  own repo (R24 is wontfix here). Until it serves `/reset-password`, the
+  mailed reset link answers 404.
 - `GET /v1/models/{id}` (from R23), when a client is found that needs it.
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`
   stops re-deriving the burst clamp (from R23's review).

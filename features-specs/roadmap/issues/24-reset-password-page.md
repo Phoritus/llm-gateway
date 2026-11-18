@@ -1,6 +1,6 @@
 # 24 Serve the reset-password page the reset mail links to
 
-Status: ready-for-agent
+Status: wontfix
 Blocked by: -
 
 The reset mail links to `PUBLIC_BASE_URL/reset-password?token=…`, a page the
@@ -20,3 +20,9 @@ always allowed by the same-origin guard, or the deploy adds it to
 over.
 
 ## Comments
+
+- 2026-11-18: wontfix in this repo, by the owner's decision. The page is
+  frontend, and the frontend will live in its own repo; this one stays
+  backend only. A first version was built here (PR #29) and reverted. Until
+  the frontend serves `/reset-password`, the mailed link answers 404, which
+  is accepted. `POST /api/auth/reset-password` is the backend's whole part.
