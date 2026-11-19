@@ -139,6 +139,18 @@ test-db-down: ## Remove the throwaway test Postgres
 tidy: ## Tidy go.mod and go.sum
 	$(GO) mod tidy
 
+.PHONY: ssh
+ssh: ## Open a shell on the VM named by VM_HOST in .env.dev
+	@scripts/vm.sh ssh
+
+.PHONY: deploy
+deploy: ## Pull main on the VM and rebuild and restart the stack in deploy/
+	@scripts/vm.sh deploy
+
+.PHONY: vm-logs
+vm-logs: ## Follow the gateway's logs on the VM
+	@scripts/vm.sh logs
+
 # --- Packaging ---------------------------------------------------------------
 
 .PHONY: docker-build

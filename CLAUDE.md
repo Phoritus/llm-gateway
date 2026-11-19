@@ -73,6 +73,7 @@ Day to day:
 | `make loadtest` | Start a gateway on `LOAD_PORT` (18081) with the `/v1` limits raised, load `mock/echo` with vegeta at `LOAD_RATE` (100/s) for `LOAD_DURATION` (30s), streaming and not, and fail unless p50 is under 10ms and peak memory under 256 MB. Needs `deps-up` and `uv`, not `make run` |
 | `make env-secrets` | Fill in a missing or placeholder `MASTER_KEY`/`SESSION_SECRET` |
 | `make docker-build` | Build the container image |
+| `make ssh` / `make deploy` / `make vm-logs` | Open a shell on the deployed VM, pull `main` there and rebuild the stack in `deploy/`, or follow the gateway's logs. Reads `VM_HOST`, `VM_USER` and `VM_KEY` from `.env.dev` |
 
 `make` needs bash on `PATH`; on Windows run it from Git Bash. If `make` itself
 is missing: `winget install ezwinports.make`.

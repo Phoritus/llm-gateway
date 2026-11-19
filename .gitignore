@@ -9,6 +9,7 @@
 .env*.tmp.*
 .env.prod
 .env.dev
+*.pem
 
 *.test
 *.out

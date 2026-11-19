@@ -141,6 +141,16 @@ pick_port() {
 	die "no free port found starting at $1"
 }
 
+# env_value <key> <default> reads one variable from the environment, then from
+# ENV_FILE, without loading the whole file.
+env_value() {
+	local key="$1" fallback="$2" value="${!1:-}"
+	if [[ -z "$value" && -f "$ENV_FILE" ]]; then
+		value="$(sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tail -1 | tr -d '\r')"
+	fi
+	printf '%s' "${value:-$fallback}"
+}
+
 # compose runs docker compose for this project. Compose only finds a file
 # named .env on its own, so the port overrides in ENV_FILE are passed in.
 compose() {
