@@ -15,17 +15,6 @@ obs_compose() {
 	compose --profile observability "$@"
 }
 
-# env_value <key> <default> reads one variable from the environment, then from
-# ENV_FILE, without loading the whole file: compose reads the same file for the
-# port substitution, and this must agree with it.
-env_value() {
-	local key="$1" fallback="$2" value="${!1:-}"
-	if [[ -z "$value" && -f "$ENV_FILE" ]]; then
-		value="$(sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tail -1 | tr -d '\r')"
-	fi
-	printf '%s' "${value:-$fallback}"
-}
-
 wait_grafana() {
 	require curl "It is used to poll Grafana's health endpoint."
 	local port deadline=$((SECONDS + 120))
