@@ -1,0 +1,30 @@
+# The production stack on one VM: the gateway, Redis and Caddy for HTTPS.
+# Postgres is external (Neon or Azure), named by DATABASE_URL in .env.prod.
+# Run from this folder: docker compose up -d --build
+services:
+  gateway:
+    build: ..
+    env_file: .env.prod
+    depends_on: [redis]
+    restart: unless-stopped
+  redis:
+    image: redis:8-alpine
+    # Redis holds only state that can be lost: rate-limit buckets, skip flags,
+    # free-quota counters and cached answers. So no persistence, and a cap
+    # that fits a 1 GiB VM.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env, e.g. DOMAIN=api.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [gateway]
+    restart: unless-stopped
+volumes:
+  caddy_data:
+  caddy_config:
