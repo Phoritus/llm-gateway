@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Environment names the deployment this process is running in. Only
@@ -428,17 +429,13 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// splitList splits a comma-separated variable into its non-empty entries. It
-// does no further cleaning: what counts as normalized differs per setting, and
-// an origin's rule has no business being applied to a CIDR range.
+// splitList splits a variable separated by commas, whitespace or both into its
+// entries. It does no further cleaning: what counts as normalized differs per
+// setting, and an origin's rule has no business being applied to a CIDR range.
 func splitList(raw string) []string {
-	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
 }
 
 func durationOr(key string, fallback time.Duration) (time.Duration, error) {

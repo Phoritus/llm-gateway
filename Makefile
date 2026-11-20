@@ -151,6 +151,10 @@ deploy: ## Pull main on the VM and rebuild and restart the stack in deploy/
 vm-logs: ## Follow the gateway's logs on the VM
 	@scripts/vm.sh logs
 
+.PHONY: cloudflare-ips
+cloudflare-ips: ## Refresh Cloudflare's ranges in deploy/trusted-proxies.env
+	@scripts/cloudflare-ips.sh
+
 # --- Packaging ---------------------------------------------------------------
 
 .PHONY: docker-build

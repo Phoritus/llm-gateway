@@ -1,3 +1,13 @@
+{
+	servers {
+		# Without this Caddy replaces the X-Forwarded-For that Cloudflare
+		# sends with the edge node's address, and every client behind one
+		# node shares the gateway's rate-limit bucket.
+		trusted_proxies static {$TRUSTED_PROXIES}
+		trusted_proxies_strict
+	}
+}
+
 {$DOMAIN} {
 	reverse_proxy gateway:8080
 }

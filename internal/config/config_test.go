@@ -450,3 +450,19 @@ func TestLoadAllowsNoOTLPEndpointInProduction(t *testing.T) {
 		t.Errorf("OTLPEndpoint = %q, want empty", cfg.OTLPEndpoint)
 	}
 }
+
+// deploy/trusted-proxies.env feeds the same value to Caddy, whose
+// trusted_proxies takes its ranges separated by spaces.
+func TestLoadReadsTrustedProxiesSeparatedBySpacesOrCommas(t *testing.T) {
+	env := productionEnv(t)
+	env["TRUSTED_PROXIES"] = "173.245.48.0/20 103.21.244.0/22,2400:cb00::/32"
+	apply(t, env)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if len(cfg.TrustedProxies) != 3 {
+		t.Fatalf("TrustedProxies = %v, want 3 ranges", cfg.TrustedProxies)
+	}
+}

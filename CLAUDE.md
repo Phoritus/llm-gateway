@@ -74,6 +74,7 @@ Day to day:
 | `make env-secrets` | Fill in a missing or placeholder `MASTER_KEY`/`SESSION_SECRET` |
 | `make docker-build` | Build the container image |
 | `make ssh` / `make deploy` / `make vm-logs` | Open a shell on the deployed VM, pull `main` there and rebuild the stack in `deploy/`, or follow the gateway's logs. Reads `VM_HOST`, `VM_USER` and `VM_KEY` from `.env.dev` |
+| `make cloudflare-ips` | Rewrite `deploy/trusted-proxies.env` from Cloudflare's published ranges. Commit it, then `make deploy` |
 
 `make` needs bash on `PATH`; on Windows run it from Git Bash. If `make` itself
 is missing: `winget install ezwinports.make`.
@@ -148,7 +149,10 @@ look completely different: a missing range means everyone behind one CDN edge
 node shares a bucket and legitimate users get 429s, while a range listed that
 is not really a proxy lets anyone inside it choose its own bucket and the limit
 stops existing. IPv6 is bucketed per `/64`, not per address, because a single
-client is routinely handed the whole prefix.
+client is routinely handed the whole prefix. On the VM, Caddy sits between
+Cloudflare and the gateway and drops `X-Forwarded-For` from any peer outside
+its own `trusted_proxies`, so both read the one list in
+`deploy/trusted-proxies.env`, which overrides `TRUSTED_PROXIES` in `.env.prod`.
 
 **`internal/config` is the only place a duration or an origin policy is
 decided.** `config.Load` validates every lifetime the service runs on
