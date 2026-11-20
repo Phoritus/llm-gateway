@@ -4,7 +4,7 @@
 services:
   gateway:
     build: ..
-    env_file: .env.prod
+    env_file: [.env.prod, trusted-proxies.env]
     depends_on: [redis]
     restart: unless-stopped
   redis:
@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
   caddy:
     image: caddy:2
+    env_file: trusted-proxies.env
     ports: ["80:80", "443:443"]
     environment:
       DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env, e.g. DOMAIN=api.example.com}
