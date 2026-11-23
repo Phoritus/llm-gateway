@@ -41,7 +41,7 @@ var Families = map[string]Family{
 		Models: map[provider.Vendor]string{provider.VendorOpenRouter: "baai/bge-m3"},
 	},
 	"mock": {
-		Name: "mock", Dims: 8, Matryoshka: true, Threshold: 0.8,
+		Name: "mock", Dims: 8, Matryoshka: true, Threshold: 0.9,
 		Models: map[provider.Vendor]string{provider.VendorMock: "mock/embed"},
 	},
 }

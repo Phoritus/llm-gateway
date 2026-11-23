@@ -163,29 +163,21 @@ func (s *Semantic) Put(ctx context.Context, workspaceID string, fam Family, ctxH
 	return nil
 }
 
-// topElement reads the element id out of a VSIM ... WITHSCORES reply, which is
-// a map of element to score under RESP3 and a flat list of pairs under RESP2.
-// It returns "" for an empty reply.
+// topElement reads the closest element id out of a VSIM reply, or "" when
+// nothing in the context was close enough.
 func topElement(reply any) (string, error) {
-	switch r := reply.(type) {
-	case map[any]any:
-		if len(r) == 0 {
-			return "", nil
-		}
-		for k := range r {
-			if id, ok := k.(string); ok {
-				return id, nil
-			}
-		}
-	case []any:
-		if len(r) == 0 {
-			return "", nil
-		}
-		if id, ok := r[0].(string); ok {
-			return id, nil
-		}
+	r, ok := reply.([]any)
+	if !ok {
+		return "", fmt.Errorf("cache: vsim returned %T, want a list of elements", reply)
 	}
-	return "", fmt.Errorf("cache: vsim returned %T, want an element and its score", reply)
+	if len(r) == 0 {
+		return "", nil
+	}
+	id, ok := r[0].(string)
+	if !ok {
+		return "", fmt.Errorf("cache: vsim element is %T, want a string", r[0])
+	}
+	return id, nil
 }
 
 func elementID(ctxHash string, v Vector) string {
