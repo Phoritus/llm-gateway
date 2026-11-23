@@ -58,3 +58,21 @@ func TestV1HonoursTheWorkspaceCacheSwitch(t *testing.T) {
 		t.Fatalf("with the workspace's cache back on: X-Cache = %q, want HIT", got)
 	}
 }
+
+func TestWorkspaceSettingsSemanticCacheIsOffUntilSet(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+
+	if res := alice.do(http.MethodGet, "/api/workspace/settings", nil); res.body["semantic_cache_enabled"] != false {
+		t.Fatalf("the semantic cache must default off: %s", res.raw)
+	}
+	if res := alice.do(http.MethodPut, "/api/workspace/settings", map[string]any{"semantic_cache_enabled": true}); res.status != http.StatusOK || res.body["semantic_cache_enabled"] != true {
+		t.Fatalf("put: %d %s", res.status, res.raw)
+	}
+	if res := alice.do(http.MethodGet, "/api/workspace/settings", nil); res.body["semantic_cache_enabled"] != true || res.body["cache_enabled"] != true {
+		t.Fatalf("the put was not kept, or changed the exact cache switch: %s", res.raw)
+	}
+	if res := alice.do(http.MethodPut, "/api/workspace/settings", map[string]any{"cache_enabled": false}); res.body["semantic_cache_enabled"] != false {
+		t.Fatalf("a put replaces the whole document: %s", res.raw)
+	}
+}

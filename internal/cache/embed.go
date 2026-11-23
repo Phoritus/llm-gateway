@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/store"
 )
 
 // Family is a set of upstream models whose vectors are comparable, so failing
@@ -21,23 +22,26 @@ type Family struct {
 	Matryoshka bool
 	// Models is the name each vendor serves the family under.
 	Models map[provider.Vendor]string
+	// Threshold is the lowest cosine at which a stored question counts as the
+	// same question.
+	Threshold float64
 }
 
 // Families is every family the semantic cache can use.
 var Families = map[string]Family{
 	"gemini-embedding-2": {
-		Name: "gemini-embedding-2", Dims: 1024, Matryoshka: true,
+		Name: "gemini-embedding-2", Dims: 1024, Matryoshka: true, Threshold: 0.95,
 		Models: map[provider.Vendor]string{
 			provider.VendorGemini:     "gemini-embedding-2",
 			provider.VendorOpenRouter: "google/gemini-embedding-2",
 		},
 	},
 	"bge-m3": {
-		Name: "bge-m3", Dims: 1024,
+		Name: "bge-m3", Dims: 1024, Threshold: 0.95,
 		Models: map[provider.Vendor]string{provider.VendorOpenRouter: "baai/bge-m3"},
 	},
 	"mock": {
-		Name: "mock", Dims: 8, Matryoshka: true,
+		Name: "mock", Dims: 8, Matryoshka: true, Threshold: 0.9,
 		Models: map[provider.Vendor]string{provider.VendorMock: "mock/embed"},
 	},
 }
@@ -57,7 +61,32 @@ type EmbedTarget struct {
 type Vector struct {
 	Family string
 	Dims   int
+	// Model is the upstream model that produced it.
+	Model  string
 	Values []float32
+}
+
+var semanticOrder = []string{"gemini-embedding-2", "bge-m3", "mock"}
+
+// Plan picks the family to embed a request's question with and the targets to
+// embed through, in route order. It takes the first family in preference order
+// that some target's vendor serves and this Embeddings has an adapter for, so a
+// vendor with no adapter, such as the mock in production, is never offered.
+// ok is false when no family qualifies.
+func (e *Embeddings) Plan(targets []store.ResolvedTarget) (fam Family, plan []EmbedTarget, ok bool) {
+	for _, name := range semanticOrder {
+		fam = Families[name]
+		plan = plan[:0:0]
+		for _, t := range targets {
+			if _, serves := fam.Models[t.Vendor]; serves && e.adapters[t.Vendor] != nil {
+				plan = append(plan, EmbedTarget{Vendor: t.Vendor, Cred: provider.Credential{APIKey: t.Secret}})
+			}
+		}
+		if len(plan) > 0 {
+			return fam, plan, true
+		}
+	}
+	return Family{}, nil, false
 }
 
 // Embeddings embeds text through a workspace's credentials. Every error it
@@ -95,6 +124,7 @@ func (e *Embeddings) Embed(ctx context.Context, fam Family, targets []EmbedTarge
 		if err == nil {
 			var v Vector
 			if v, err = unitVector(fam, resp.Vector); err == nil {
+				v.Model = model
 				return v, nil
 			}
 		}

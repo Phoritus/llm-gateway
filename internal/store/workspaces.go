@@ -54,6 +54,9 @@ type WorkspaceSettings struct {
 	// CacheOff turns caching off for every route in the workspace, whatever
 	// the route's own mode.
 	CacheOff bool `json:"cache_off,omitempty"`
+	// SemanticCache opts the workspace into the semantic cache, which also
+	// needs the deployment to run with SEMANTIC_CACHE on.
+	SemanticCache bool `json:"semantic_cache,omitempty"`
 }
 
 func (s *Store) WorkspaceSettings(ctx context.Context, workspaceID string) (WorkspaceSettings, error) {

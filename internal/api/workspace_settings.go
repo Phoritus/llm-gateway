@@ -8,11 +8,12 @@ import (
 )
 
 type settingsView struct {
-	CacheEnabled bool `json:"cache_enabled"`
+	CacheEnabled         bool `json:"cache_enabled"`
+	SemanticCacheEnabled bool `json:"semantic_cache_enabled"`
 }
 
 func settingsViewOf(s store.WorkspaceSettings) settingsView {
-	return settingsView{CacheEnabled: !s.CacheOff}
+	return settingsView{CacheEnabled: !s.CacheOff, SemanticCacheEnabled: s.SemanticCache}
 }
 
 func defaultSettingsView() settingsView {
@@ -20,7 +21,7 @@ func defaultSettingsView() settingsView {
 }
 
 func (v settingsView) settings() store.WorkspaceSettings {
-	return store.WorkspaceSettings{CacheOff: !v.CacheEnabled}
+	return store.WorkspaceSettings{CacheOff: !v.CacheEnabled, SemanticCache: v.SemanticCacheEnabled}
 }
 
 func (d Deps) handleGetWorkspaceSettings(w http.ResponseWriter, r *http.Request) {

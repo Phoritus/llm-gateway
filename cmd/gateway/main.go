@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"llm-gateway/internal/api"
@@ -261,17 +263,33 @@ func run(logger *slog.Logger) error {
 		logger.Info("CACHE_TTL is 0: the exact cache is off")
 	}
 
+	var (
+		semanticCache gateway.SemanticCache
+		embeddings    *cache.Embeddings
+	)
+	if cfg.SemanticCache {
+		vectors, err := newVectorRedis(ctx, cfg.VectorRedisURL, logger)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = vectors.Close() }()
+		semanticCache = cache.NewSemantic(vectors)
+		embeddings = cache.NewEmbeddings(embedders(providers), semanticEmbedTimeout)
+	}
+
 	mux.Handle("/v1/", http.StripPrefix("/v1", gateway.Routes(gateway.Deps{
-		Keys:      gatewayKeys,
-		Routes:    deps.Credentials,
-		Aliases:   st,
-		Providers: providers,
-		Router:    fallback,
-		Usage:     usageRecorder,
-		Timeout:   cfg.V1RequestTimeout,
-		Cache:     responseCache,
-		Quota:     quota.New(catalog, v1Limiter, logger),
-		Limiter:   v1Limiter,
+		Keys:       gatewayKeys,
+		Routes:     deps.Credentials,
+		Aliases:    st,
+		Providers:  providers,
+		Router:     fallback,
+		Usage:      usageRecorder,
+		Timeout:    cfg.V1RequestTimeout,
+		Cache:      responseCache,
+		Semantic:   semanticCache,
+		Embeddings: embeddings,
+		Quota:      quota.New(catalog, v1Limiter, logger),
+		Limiter:    v1Limiter,
 		Limits: gateway.Limits{
 			KeyRequests:          ratelimit.PerMinute(float64(cfg.V1KeyRPM)),
 			KeyTokens:            ratelimit.PerMinute(float64(cfg.V1KeyTPM)),
@@ -364,4 +382,31 @@ func run(logger *slog.Logger) error {
 	usageRecorder.Close(flushCtx)
 	logger.Info("stopped")
 	return nil
+}
+
+const semanticEmbedTimeout = 2 * time.Second
+
+func newVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*redis.Client, error) {
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		return nil, fmt.Errorf("parse VECTOR_REDIS_URL: %w", err)
+	}
+	client := redis.NewClient(opts)
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx).Err(); err != nil {
+		logger.Warn("the vector Redis does not answer: semantic lookups miss until it does",
+			slog.String("error", err.Error()))
+	}
+	return client, nil
+}
+
+func embedders(providers map[provider.Vendor]provider.Provider) map[provider.Vendor]provider.Embedder {
+	out := map[provider.Vendor]provider.Embedder{}
+	for vendor, p := range providers {
+		if e, ok := p.(provider.Embedder); ok {
+			out[vendor] = e
+		}
+	}
+	return out
 }

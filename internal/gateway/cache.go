@@ -24,6 +24,14 @@ type ResponseCache interface {
 	Put(ctx context.Context, key string, e cache.Entry) (bool, error)
 }
 
+// SemanticCache stores answers by the meaning of the last question asked in a
+// context. *cache.Semantic is the production one. Lookup returns nil when no
+// stored question is close enough.
+type SemanticCache interface {
+	Lookup(ctx context.Context, workspaceID string, fam cache.Family, ctxHash cache.ContextHash, v cache.Vector) (*cache.Entry, error)
+	Put(ctx context.Context, workspaceID string, fam cache.Family, ctxHash cache.ContextHash, v cache.Vector, e cache.Entry) error
+}
+
 // vendorCache is the vendor label of a request the cache answered. A hit's
 // time to first token is close to nothing, and under the vendor that produced
 // the stored answer it would pull that vendor's histogram down.
@@ -32,15 +40,16 @@ const vendorCache = "cache"
 // The results a request can have at the cache, which are the label on its
 // counter.
 const (
-	cacheHit     = "hit"
-	cacheMiss    = "miss"
-	cacheStored  = "stored"
-	cacheSkipped = "skipped"
-	cacheError   = "error"
+	cacheHit         = "hit"
+	cacheSemanticHit = "semantic_hit"
+	cacheMiss        = "miss"
+	cacheStored      = "stored"
+	cacheSkipped     = "skipped"
+	cacheError       = "error"
 )
 
 var cacheResults, _ = meter.Int64Counter("gateway.cache",
-	metric.WithDescription("What the exact cache did with a request: hit, miss, stored, skipped (not cacheable) or error."))
+	metric.WithDescription("What the cache did with a request: hit, semantic_hit, miss, stored, skipped (not cacheable) or error."))
 
 func countCache(result string) {
 	cacheResults.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", result)))
@@ -51,7 +60,14 @@ type cacheLookup struct {
 	// key is empty when the request is not cacheable, or the cache is off.
 	key string
 	// hit is the stored answer, when there is one.
-	hit *cache.Entry
+	hit      *cache.Entry
+	semantic *semanticQuery
+}
+
+type semanticQuery struct {
+	fam     cache.Family
+	ctxHash cache.ContextHash
+	vector  cache.Vector
 }
 
 // lookupCache is step 4 of the pipeline. It never fails the request: a cache
@@ -71,21 +87,61 @@ func (d Deps) lookupCache(r *http.Request, workspaceID string, route *store.Reso
 		return cacheLookup{}
 	}
 	hit, err := d.Cache.Get(ctx, key)
+	var query *semanticQuery
 	switch {
 	case err != nil:
 		d.logCache(ctx, "cache lookup failed, treated as a miss", err)
 	case hit != nil:
 		countCache(cacheHit)
 	default:
-		countCache(cacheMiss)
+		if hit, query = d.lookupSemantic(ctx, workspaceID, route, req); hit != nil {
+			countCache(cacheSemanticHit)
+		} else {
+			countCache(cacheMiss)
+		}
 	}
-	return cacheLookup{key: key, hit: hit}
+	return cacheLookup{key: key, hit: hit, semantic: query}
+}
+
+func (d Deps) lookupSemantic(ctx context.Context, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) (*cache.Entry, *semanticQuery) {
+	if d.Semantic == nil || d.Embeddings == nil || !route.Settings.SemanticCache {
+		return nil, nil
+	}
+	n := len(req.Messages)
+	if n == 0 || req.Messages[n-1].Role != "user" {
+		return nil, nil
+	}
+	text := req.Messages[n-1].Text()
+	if text == "" {
+		return nil, nil
+	}
+	fam, targets, ok := d.Embeddings.Plan(route.Targets)
+	if !ok {
+		return nil, nil
+	}
+	ctxHash, err := cache.HashContext(route, req)
+	if err != nil {
+		d.logCache(ctx, "semantic context hash failed", err)
+		return nil, nil
+	}
+	vector, err := d.Embeddings.Embed(ctx, fam, targets, text)
+	if err != nil {
+		d.logCache(ctx, "embedding failed, treated as a miss", err)
+		return nil, nil
+	}
+	query := &semanticQuery{fam: fam, ctxHash: ctxHash, vector: vector}
+	hit, err := d.Semantic.Lookup(ctx, workspaceID, fam, ctxHash, vector)
+	if err != nil {
+		d.logCache(ctx, "semantic lookup failed, treated as a miss", err)
+	}
+	return hit, query
 }
 
 // storeAnswer keeps a complete answer under the key its request missed on. It
 // runs detached, like the rate-limit reconcile: the response has been sent and
 // nobody waits on the write.
-func (d Deps) storeAnswer(ctx context.Context, key string, t store.ResolvedTarget, resp *provider.ChatResponse) {
+func (d Deps) storeAnswer(ctx context.Context, workspaceID string, cached cacheLookup, t store.ResolvedTarget, resp *provider.ChatResponse) {
+	key := cached.key
 	if key == "" {
 		return
 	}
@@ -105,6 +161,11 @@ func (d Deps) storeAnswer(ctx context.Context, key string, t store.ResolvedTarge
 			countCache(cacheStored)
 		default:
 			countCache(cacheSkipped)
+		}
+		if q := cached.semantic; q != nil {
+			if err := d.Semantic.Put(ctx, workspaceID, q.fam, q.ctxHash, q.vector, entry); err != nil {
+				d.logCache(ctx, "semantic cache write failed", err)
+			}
 		}
 	}()
 }

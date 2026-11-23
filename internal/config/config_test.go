@@ -33,7 +33,7 @@ func apply(t *testing.T, env map[string]string) {
 		"APP_ENV", "PORT", "ALLOWED_ORIGINS", "PUBLIC_BASE_URL", "TRUSTED_PROXIES",
 		"DATABASE_URL", "DATABASE_URL_LOCAL", "REDIS_URL", "REDIS_URL_LOCAL",
 		"MASTER_KEY", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
-		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "CONTEXT_HANDOFF",
+		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "VECTOR_REDIS_URL", "VECTOR_REDIS_URL_LOCAL", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
 		"USAGE_QUEUE_SIZE", "USAGE_RETENTION", "SHUTDOWN_TIMEOUT", "CACHE_TTL",
@@ -464,5 +464,25 @@ func TestLoadReadsTrustedProxiesSeparatedBySpacesOrCommas(t *testing.T) {
 	}
 	if len(cfg.TrustedProxies) != 3 {
 		t.Fatalf("TrustedProxies = %v, want 3 ranges", cfg.TrustedProxies)
+	}
+}
+
+func TestLoadRequiresAVectorRedisOnlyForTheSemanticCache(t *testing.T) {
+	env := productionEnv(t)
+	apply(t, env)
+	if cfg, err := Load(); err != nil || cfg.VectorRedisURL != "" {
+		t.Fatalf("with the semantic cache off, Load() = %q, %v, want no error and no URL", cfg.VectorRedisURL, err)
+	}
+
+	env["SEMANTIC_CACHE"] = "true"
+	apply(t, env)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "VECTOR_REDIS_URL") {
+		t.Fatalf("Load() = %v, want a refusal naming VECTOR_REDIS_URL", err)
+	}
+
+	env["VECTOR_REDIS_URL"] = "redis://redis:6379"
+	apply(t, env)
+	if cfg, err := Load(); err != nil || cfg.VectorRedisURL != "redis://redis:6379" {
+		t.Fatalf("Load() = %q, %v, want the URL", cfg.VectorRedisURL, err)
 	}
 }

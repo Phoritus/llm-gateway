@@ -66,6 +66,9 @@ type Config struct {
 	AllowedOrigins Origins
 	DatabaseURL    string
 	RedisURL       string
+	// VectorRedisURL names the Redis 8 that holds the semantic cache's
+	// vectors. Set only when SemanticCache is on: Upstash has no vector sets.
+	VectorRedisURL string
 	MasterKey      []byte
 	SessionSecret  []byte
 	SessionTTL     time.Duration
@@ -359,6 +362,11 @@ func Load() (*Config, error) {
 		fail("%v", err)
 	} else {
 		cfg.SemanticCache = b
+	}
+	if cfg.SemanticCache {
+		if name, cfg.VectorRedisURL = connectionURL(cfg.Env, "VECTOR_REDIS_URL"); cfg.VectorRedisURL == "" {
+			fail("%s is required when SEMANTIC_CACHE is on", name)
+		}
 	}
 	if b, err := boolOr("CONTEXT_HANDOFF", false); err != nil {
 		fail("%v", err)

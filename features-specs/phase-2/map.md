@@ -23,24 +23,23 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 04, 06, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
+**Done:** 01 to 06, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
 compose stack with Caddy and `make deploy` from 10.
 
 **Next, for an agent, in this order:**
 
-1. **05 Semantic cache.** Its vectors go in the VM's `redis:8-alpine`
-   container, since Upstash has no vector sets.
-2. **08 then 09.** The SSRF guard, then custom endpoints behind it.
-3. **07 Context handoff.**
-4. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
+1. **08 then 09.** The SSRF guard, then custom endpoints behind it.
+2. **07 Context handoff.**
+3. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
    requests.
-5. **12 Dashboards and alerts on Grafana Cloud.**
+4. **12 Dashboards and alerts on Grafana Cloud.**
 
 **Next, for the owner:**
 
 - **R16:** a real SMTP relay in `deploy/.env.prod`, and one signup whose mail
   arrives.
 - **R19:** free-tier provider keys, then `make live`.
+- **05:** turn it on: `SEMANTIC_CACHE=true` and `VECTOR_REDIS_URL=redis://redis:6379` in `deploy/.env.prod`, then calibrate the 0.95 thresholds on real traffic.
 - **13:** move the data from Neon to Azure Postgres, if Neon still holds any.
 
 Then **14, Gate B**. Tickets 15 to 18 come after it.
@@ -69,7 +68,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `resolved` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `resolved` | 02 |
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `resolved` | - |
-| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline, vectors in the VM's Redis | task | `ready-for-agent` | 01, 03, 04 |
+| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline, vectors in the VM's Redis | task | `resolved` | 01, 03, 04 |
 | **Context handoff** | | | | |
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
 | [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
@@ -145,6 +144,10 @@ point), `grilling` needs the user's decisions before anything is built,
   Redis, Grafana Cloud kept for metrics, traces and alerts. Nothing moves to
   a self-hosted Prometheus or Postgres. Backups are Azure's own. The VM's
   `redis:8-alpine` stays, for the semantic cache's vectors only (ticket 05).
+- Ticket 05 (semantic cache): a hit needs the same context hash, so only the
+  last user message may vary; embed through the route's own targets, no extra
+  query; cap 1000 oldest-first per workspace and family; 7-day idle expiry.
+  See [the design](../semantic-cache/design.md).
 - Ticket 18 (budgets), the owner's decision: money, not tokens, as other
   gateways do; per workspace and per gateway key; block or warn chosen per
   budget, block by default. A price table beside `free_quota_catalog` is

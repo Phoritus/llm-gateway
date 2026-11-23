@@ -44,6 +44,33 @@ type Entry struct {
 // whitespace, which the raw fields would carry through, cannot split one
 // request into two entries.
 func Key(workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) (string, error) {
+	sum, err := requestHash(route, req)
+	if err != nil {
+		return "", err
+	}
+	return "cache:" + workspaceID + ":" + sum, nil
+}
+
+// ContextHash is a hex SHA-256, minted only by HashContext, so it is safe to
+// quote inside a VSIM filter.
+type ContextHash string
+
+// HashContext is Key's hash with the last message's content left out: the
+// route, its version and everything in the request but the final question.
+// The semantic cache filters on it, so a stored answer is only ever offered to
+// a question asked under the same system prompt, history, temperature and
+// route.
+func HashContext(route *store.ResolvedRoute, req *provider.ChatRequest) (ContextHash, error) {
+	r := *req
+	if n := len(r.Messages); n > 0 {
+		r.Messages = append([]provider.Message(nil), r.Messages...)
+		r.Messages[n-1].Content = nil
+	}
+	sum, err := requestHash(route, &r)
+	return ContextHash(sum), err
+}
+
+func requestHash(route *store.ResolvedRoute, req *provider.ChatRequest) (string, error) {
 	r := *req
 	r.Model, r.Stream, r.StreamOptions, r.User = "", false, nil, ""
 	raw, err := json.Marshal(r)
@@ -69,7 +96,7 @@ func Key(workspaceID string, route *store.ResolvedRoute, req *provider.ChatReque
 	h.Write([]byte(strconv.FormatInt(route.Version, 10)))
 	h.Write([]byte{0})
 	h.Write(normalized)
-	return "cache:" + workspaceID + ":" + hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // RequestCacheable reports whether a request's answer may be served from, and
