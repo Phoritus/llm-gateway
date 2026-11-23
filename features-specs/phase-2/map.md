@@ -19,17 +19,17 @@ off. Phase 2 code stays behind them, out of Phase 1 paths.
 Production runs on one Azure VM: the gateway and Caddy under compose
 (`deploy/`), behind Cloudflare, shipped with `make deploy`. Postgres is
 Azure's managed Postgres, Redis stays on Upstash, and metrics and traces
-stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres or
-Redis to run. That shrinks tickets 10, 12 and 13, and leaves the semantic
-cache with an open question (ticket 05).
+stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
+run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
+because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
 **Done:** 01 to 04, 06, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
 compose stack with Caddy and `make deploy` from 10.
 
 **Next, for an agent, in this order:**
 
-1. **05 Semantic cache.** It needs the owner's answer on where its vectors
-   live first, because Upstash has no vector sets.
+1. **05 Semantic cache.** Its vectors go in the VM's `redis:8-alpine`
+   container, since Upstash has no vector sets.
 2. **08 then 09.** The SSRF guard, then custom endpoints behind it.
 3. **07 Context handoff.**
 4. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
@@ -42,7 +42,6 @@ compose stack with Caddy and `make deploy` from 10.
   arrives.
 - **R19:** free-tier provider keys, then `make live`.
 - **13:** move the data from Neon to Azure Postgres, if Neon still holds any.
-- **05:** decide where the semantic cache's vectors live.
 
 Then **14, Gate B**. Tickets 15 to 18 come after it.
 
@@ -70,7 +69,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `resolved` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `resolved` | 02 |
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `resolved` | - |
-| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline (where the vectors live: owner to decide) | task | `needs-info` | 01, 03, 04 |
+| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline, vectors in the VM's Redis | task | `ready-for-agent` | 01, 03, 04 |
 | **Context handoff** | | | | |
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
 | [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
@@ -144,7 +143,8 @@ point), `grilling` needs the user's decisions before anything is built,
 - Hosting, the owner's decision (2026-11-23): one Azure VM for the gateway
   and Caddy, Azure's managed Postgres in place of Neon, Upstash kept for
   Redis, Grafana Cloud kept for metrics, traces and alerts. Nothing moves to
-  a self-hosted Prometheus, Postgres or Redis. Backups are Azure's own.
+  a self-hosted Prometheus or Postgres. Backups are Azure's own. The VM's
+  `redis:8-alpine` stays, for the semantic cache's vectors only (ticket 05).
 - Ticket 18 (budgets), the owner's decision: money, not tokens, as other
   gateways do; per workspace and per gateway key; block or warn chosen per
   budget, block by default. A price table beside `free_quota_catalog` is
