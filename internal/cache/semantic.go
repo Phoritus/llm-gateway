@@ -32,7 +32,15 @@ const (
 // vector.
 var putScript = redis.NewScript(`
 local dims = tonumber(ARGV[7])
-redis.call('VADD', KEYS[1], 'VALUES', dims, unpack(ARGV, 8, 7 + dims), ARGV[1], 'Q8', 'SETATTR', ARGV[2])
+-- unpack in the middle of an argument list yields one value, so the call is built whole.
+local vadd = {'VALUES', dims}
+for i = 8, 7 + dims do
+  vadd[#vadd + 1] = ARGV[i]
+end
+for _, a in ipairs({ARGV[1], 'Q8', 'SETATTR', ARGV[2]}) do
+  vadd[#vadd + 1] = a
+end
+redis.call('VADD', KEYS[1], unpack(vadd))
 redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
 redis.call('HSET', KEYS[3], ARGV[1], ARGV[4])
 local over = redis.call('ZCARD', KEYS[2]) - tonumber(ARGV[5])
