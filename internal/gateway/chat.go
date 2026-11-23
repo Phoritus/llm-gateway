@@ -172,7 +172,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, whole.answer.Response())
 	}
 	if !obs.cached && whole.complete {
-		d.storeAnswer(ctx, cached.key, obs.target, whole.answer.Response())
+		d.storeAnswer(ctx, key.WorkspaceID, cached, obs.target, whole.answer.Response())
 	}
 }
 

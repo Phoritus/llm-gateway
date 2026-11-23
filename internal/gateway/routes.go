@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"llm-gateway/internal/cache"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
@@ -40,6 +41,10 @@ type Deps struct {
 	// Cache answers a repeated request without an upstream call. Nil turns
 	// the exact cache off.
 	Cache ResponseCache
+	// Semantic and Embeddings together answer a reworded request from the
+	// semantic cache. Either nil turns it off; a workspace must opt in as well.
+	Semantic   SemanticCache
+	Embeddings *cache.Embeddings
 	// Quota puts a free-first route's targets with free quota left first.
 	// Nil leaves every route in its own order.
 	Quota FreeQuota
