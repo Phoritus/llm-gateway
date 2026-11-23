@@ -286,7 +286,7 @@ Environment variables only — see `.env.example`. The service must refuse to st
 
 ## Phasing
 
-Phase 1 runs on free tiers (Render, Upstash Redis, Neon Postgres) with exact-match caching only. Phase 2 consolidates onto one VPS and adds the semantic cache, context handoff, Prometheus and Grafana, and custom endpoints behind an SSRF guard. Keep Phase 2 work out of Phase 1 paths except behind the flags above.
+Production runs on one Azure VM (the gateway and Caddy, `deploy/`) behind Cloudflare, with Azure's managed Postgres (replacing Neon), Upstash Redis and Grafana Cloud. The spec's Render host and self-hosted Prometheus were dropped by the owner on 2026-11-23. Phase 2 adds the semantic cache, context handoff, Grafana Cloud dashboards and alerts, and custom endpoints behind an SSRF guard. Keep Phase 2 work out of Phase 1 paths except behind the flags above.
 
 Build order from the spec: skeleton (config, connections, migrations, health endpoints, request id, logging) → mock provider streaming through `/v1`, the first thing to demo → gateway keys, encrypted credentials, routes, control plane → real adapters → rate limiting, then routing with fallback → usage events and metrics (**Gate A: free launch**) → free-first routing and exact cache → Phase 2 (**Gate B: go live**).
 

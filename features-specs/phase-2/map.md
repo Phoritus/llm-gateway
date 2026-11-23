@@ -14,6 +14,38 @@ Gate B and do not block it.
 `SEMANTIC_CACHE` and `CONTEXT_HANDOFF` already exist in `config` and default
 off. Phase 2 code stays behind them, out of Phase 1 paths.
 
+## Where it stands (2026-11-23)
+
+Production runs on one Azure VM: the gateway and Caddy under compose
+(`deploy/`), behind Cloudflare, shipped with `make deploy`. Postgres is
+Azure's managed Postgres, Redis stays on Upstash, and metrics and traces
+stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres or
+Redis to run. That shrinks tickets 10, 12 and 13, and leaves the semantic
+cache with an open question (ticket 05).
+
+**Done:** 01 to 04, 06, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
+compose stack with Caddy and `make deploy` from 10.
+
+**Next, for an agent, in this order:**
+
+1. **05 Semantic cache.** It needs the owner's answer on where its vectors
+   live first, because Upstash has no vector sets.
+2. **08 then 09.** The SSRF guard, then custom endpoints behind it.
+3. **07 Context handoff.**
+4. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
+   requests.
+5. **12 Dashboards and alerts on Grafana Cloud.**
+
+**Next, for the owner:**
+
+- **R16:** a real SMTP relay in `deploy/.env.prod`, and one signup whose mail
+  arrives.
+- **R19:** free-tier provider keys, then `make live`.
+- **13:** move the data from Neon to Azure Postgres, if Neon still holds any.
+- **05:** decide where the semantic cache's vectors live.
+
+Then **14, Gate B**. Tickets 15 to 18 come after it.
+
 ## How to take a ticket
 
 Exactly as in [the first roadmap](../roadmap/map.md#how-to-take-a-ticket):
@@ -38,20 +70,20 @@ point), `grilling` needs the user's decisions before anything is built,
 | [02](issues/02-embedding-providers.md) | Embedding providers: who pays, which models, which dimensions | research | `resolved` | - |
 | [03](issues/03-embedding-adapter.md) | Embedding adapter | task | `resolved` | 02 |
 | [04](issues/04-workspace-settings.md) | Workspace settings API | task | `resolved` | - |
-| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline | task | `ready-for-agent` | 01, 03, 04 |
+| [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline (where the vectors live: owner to decide) | task | `needs-info` | 01, 03, 04 |
 | **Context handoff** | | | | |
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
 | [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
 | **Custom endpoints** | | | | |
 | [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `ready-for-agent` | - |
 | [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `ready-for-agent` | 08 |
-| **VPS and observability** | | | | |
-| [10](issues/10-vps-stack.md) | The VPS stack: compose, Caddy, backups, deploy | task | `ready-for-agent` | 01 |
-| [11](issues/11-provision-vps.md) | Provision the VPS, DNS and secrets | task | `ready-for-human` | 10 |
-| [12](issues/12-prometheus-grafana.md) | Prometheus, Grafana and alerts on the VPS | task | `ready-for-agent` | 10 |
-| [13](issues/13-cutover.md) | Cut over from Render, Neon and Upstash | task | `ready-for-human` | 11, 12 |
+| **The VM and observability** | | | | |
+| [10](issues/10-vps-stack.md) | Finish the VM stack: memory limits, a deploy that does not cut requests | task | `ready-for-agent` | - |
+| [11](issues/11-provision-vps.md) | Provision the VM, DNS and secrets | task | `resolved` | - |
+| [12](issues/12-prometheus-grafana.md) | Dashboards and alerts on Grafana Cloud | task | `ready-for-agent` | - |
+| [13](issues/13-cutover.md) | Move Postgres from Neon to Azure | task | `ready-for-human` | - |
 | **Gate B** | | | | |
-| [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 13, R16 |
+| [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 10, 12, 13, R16 |
 | **After Gate B** | | | | |
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `ready-for-agent` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `ready-for-agent` | - |
@@ -109,6 +141,10 @@ point), `grilling` needs the user's decisions before anything is built,
   catalogue as the guess. Exhaustion becomes 400 `context_length_exceeded`.
   See [research.md](context-handoff/research.md) and ticket 06.
 
+- Hosting, the owner's decision (2026-11-23): one Azure VM for the gateway
+  and Caddy, Azure's managed Postgres in place of Neon, Upstash kept for
+  Redis, Grafana Cloud kept for metrics, traces and alerts. Nothing moves to
+  a self-hosted Prometheus, Postgres or Redis. Backups are Azure's own.
 - Ticket 18 (budgets), the owner's decision: money, not tokens, as other
   gateways do; per workspace and per gateway key; block or warn chosen per
   budget, block by default. A price table beside `free_quota_catalog` is

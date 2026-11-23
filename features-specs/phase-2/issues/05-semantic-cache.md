@@ -1,7 +1,7 @@
 # 05 Semantic cache in the pipeline
 
 Type: task
-Status: ready-for-agent
+Status: needs-info
 Blocked by: 01, 03, 04
 
 Behind `SEMANTIC_CACHE`, and only for a workspace that turned it on (04):
@@ -25,3 +25,5 @@ Spec: [Caching and embeddings](../../../Backend%20Architecture%20BYOK%20LLM%20Ga
 - 2026-11-18: ticket 01 settled the index: vector sets, one key per workspace and model, Q8, oldest-first eviction in one Lua script. Left open here: the cap's size and unit, LRU or insertion order, and when an old model's key is removed. See [research.md](../vector-search/research.md).
 
 - 2026-11-18: ticket 02 answered which embedders: see [research.md](../embeddings/research.md) and its open questions for this ticket.
+
+- 2026-11-23: blocked on the owner. Redis stays on Upstash, and Upstash has no vector sets (ticket 01's research). The vectors need another home. The options: keep the `redis:8-alpine` container on the VM for `vec:` keys only, under a second URL; use Upstash Vector, a separate product with its own API; or a vector column in Azure Postgres (pgvector). Recommended: the VM container, because it is already running and ticket 01's design is unchanged. A lost vector is only a miss.
