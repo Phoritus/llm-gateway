@@ -28,8 +28,8 @@ type ResponseCache interface {
 // context. *cache.Semantic is the production one. Lookup returns nil when no
 // stored question is close enough.
 type SemanticCache interface {
-	Lookup(ctx context.Context, workspaceID string, fam cache.Family, ctxHash string, v cache.Vector) (*cache.Entry, error)
-	Put(ctx context.Context, workspaceID string, fam cache.Family, ctxHash string, v cache.Vector, e cache.Entry) error
+	Lookup(ctx context.Context, workspaceID string, fam cache.Family, ctxHash cache.ContextHash, v cache.Vector) (*cache.Entry, error)
+	Put(ctx context.Context, workspaceID string, fam cache.Family, ctxHash cache.ContextHash, v cache.Vector, e cache.Entry) error
 }
 
 // vendorCache is the vendor label of a request the cache answered. A hit's
@@ -40,9 +40,7 @@ const vendorCache = "cache"
 // The results a request can have at the cache, which are the label on its
 // counter.
 const (
-	cacheHit = "hit"
-	// cacheSemanticHit is an answer found by meaning after the exact lookup
-	// missed.
+	cacheHit         = "hit"
 	cacheSemanticHit = "semantic_hit"
 	cacheMiss        = "miss"
 	cacheStored      = "stored"
@@ -62,16 +60,13 @@ type cacheLookup struct {
 	// key is empty when the request is not cacheable, or the cache is off.
 	key string
 	// hit is the stored answer, when there is one.
-	hit *cache.Entry
-	// semantic is what a semantic lookup that missed computed, so the answer
-	// can be stored under it. Nil when the request was not tried semantically.
+	hit      *cache.Entry
 	semantic *semanticQuery
 }
 
-// semanticQuery is one request's question as the semantic cache sees it.
 type semanticQuery struct {
 	fam     cache.Family
-	ctxHash string
+	ctxHash cache.ContextHash
 	vector  cache.Vector
 }
 
@@ -108,10 +103,6 @@ func (d Deps) lookupCache(r *http.Request, workspaceID string, route *store.Reso
 	return cacheLookup{key: key, hit: hit, semantic: query}
 }
 
-// lookupSemantic looks for a stored answer to a question like this request's
-// last message, asked in the same context. The query is nil when the request
-// is not eligible or its question could not be embedded, and then there is
-// nothing to store afterwards either.
 func (d Deps) lookupSemantic(ctx context.Context, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) (*cache.Entry, *semanticQuery) {
 	if d.Semantic == nil || d.Embeddings == nil || !route.Settings.SemanticCache {
 		return nil, nil
@@ -128,7 +119,7 @@ func (d Deps) lookupSemantic(ctx context.Context, workspaceID string, route *sto
 	if !ok {
 		return nil, nil
 	}
-	ctxHash, err := cache.ContextHash(route, req)
+	ctxHash, err := cache.HashContext(route, req)
 	if err != nil {
 		d.logCache(ctx, "semantic context hash failed", err)
 		return nil, nil

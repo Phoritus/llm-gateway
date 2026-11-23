@@ -13,9 +13,6 @@ import (
 	"llm-gateway/internal/provider"
 )
 
-// testSemantic returns a store over REDIS_TEST_URL, which must be a Redis 8,
-// and a workspace id of this test's own. Its three keys are deleted by name
-// afterwards: the Redis is shared with every other package's tests.
 func testSemantic(t *testing.T) (*Semantic, string) {
 	t.Helper()
 	url := os.Getenv("REDIS_TEST_URL")
@@ -91,8 +88,9 @@ func TestSemanticMissesWhatItShouldNotServe(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		workspace, ctx string
-		v              Vector
+		workspace string
+		ctx       ContextHash
+		v         Vector
 	}{
 		"another context":     {ws, "ctx-b", unit(1, 0, 0)},
 		"another workspace":   {ws + "-other", "ctx-a", unit(1, 0, 0)},
@@ -160,11 +158,11 @@ func TestSemanticPutOfTheSameQuestionReplacesIt(t *testing.T) {
 	}
 }
 
-func TestContextHashIgnoresOnlyTheLastMessage(t *testing.T) {
-	hash := func(body string) string {
-		h, err := ContextHash(testRoute, request(t, body))
+func TestHashContextIgnoresOnlyTheLastMessage(t *testing.T) {
+	hash := func(body string) ContextHash {
+		h, err := HashContext(testRoute, request(t, body))
 		if err != nil {
-			t.Fatalf("ContextHash: %v", err)
+			t.Fatalf("HashContext: %v", err)
 		}
 		return h
 	}

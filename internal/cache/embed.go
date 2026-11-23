@@ -61,14 +61,11 @@ type EmbedTarget struct {
 type Vector struct {
 	Family string
 	Dims   int
-	// Model is the upstream model that produced it, which the family alone
-	// does not say: a family is served under a different name per vendor.
+	// Model is the upstream model that produced it.
 	Model  string
 	Values []float32
 }
 
-// semanticOrder is the order families are preferred in: the best embedder
-// first, the mock last.
 var semanticOrder = []string{"gemini-embedding-2", "bge-m3", "mock"}
 
 // Plan picks the family to embed a request's question with and the targets to

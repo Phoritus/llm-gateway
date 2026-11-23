@@ -20,8 +20,6 @@ import (
 
 const otherKey = "gwk_other"
 
-// twoWorkspaces authenticates testKey as ws1 and otherKey as ws2, and routes
-// both to the same mock chain with the semantic cache on or off per workspace.
 type twoWorkspaces struct {
 	semantic map[string]bool
 }
@@ -46,9 +44,6 @@ func (w twoWorkspaces) ResolveRoute(ctx context.Context, workspaceID, alias stri
 	return route, nil
 }
 
-// vectorCache is a SemanticCache in memory that scores like Redis does: the
-// closest question in the same workspace, family and context, if its cosine
-// reaches the family's threshold.
 type vectorCache struct {
 	mu      sync.Mutex
 	entries map[string][]vectorEntry
@@ -56,7 +51,7 @@ type vectorCache struct {
 }
 
 type vectorEntry struct {
-	ctxHash string
+	ctxHash cache.ContextHash
 	vector  []float32
 	entry   cache.Entry
 }
@@ -65,7 +60,7 @@ func (c *vectorCache) key(workspaceID string, v cache.Vector) string {
 	return workspaceID + ":" + v.Family
 }
 
-func (c *vectorCache) Lookup(_ context.Context, workspaceID string, fam cache.Family, ctxHash string, v cache.Vector) (*cache.Entry, error) {
+func (c *vectorCache) Lookup(_ context.Context, workspaceID string, fam cache.Family, ctxHash cache.ContextHash, v cache.Vector) (*cache.Entry, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lookups++
@@ -84,7 +79,7 @@ func (c *vectorCache) Lookup(_ context.Context, workspaceID string, fam cache.Fa
 	return best, nil
 }
 
-func (c *vectorCache) Put(_ context.Context, workspaceID string, _ cache.Family, ctxHash string, v cache.Vector, e cache.Entry) error {
+func (c *vectorCache) Put(_ context.Context, workspaceID string, _ cache.Family, ctxHash cache.ContextHash, v cache.Vector, e cache.Entry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[c.key(workspaceID, v)] = append(c.entries[c.key(workspaceID, v)], vectorEntry{ctxHash, v.Values, e})

@@ -51,21 +51,25 @@ func Key(workspaceID string, route *store.ResolvedRoute, req *provider.ChatReque
 	return "cache:" + workspaceID + ":" + sum, nil
 }
 
-// ContextHash is Key's hash with the last message's content left out: the
+// ContextHash is a hex SHA-256, minted only by HashContext, so it is safe to
+// quote inside a VSIM filter.
+type ContextHash string
+
+// HashContext is Key's hash with the last message's content left out: the
 // route, its version and everything in the request but the final question.
 // The semantic cache filters on it, so a stored answer is only ever offered to
 // a question asked under the same system prompt, history, temperature and
 // route.
-func ContextHash(route *store.ResolvedRoute, req *provider.ChatRequest) (string, error) {
+func HashContext(route *store.ResolvedRoute, req *provider.ChatRequest) (ContextHash, error) {
 	r := *req
 	if n := len(r.Messages); n > 0 {
 		r.Messages = append([]provider.Message(nil), r.Messages...)
 		r.Messages[n-1].Content = nil
 	}
-	return requestHash(route, &r)
+	sum, err := requestHash(route, &r)
+	return ContextHash(sum), err
 }
 
-// requestHash is the normalization Key and ContextHash share.
 func requestHash(route *store.ResolvedRoute, req *provider.ChatRequest) (string, error) {
 	r := *req
 	r.Model, r.Stream, r.StreamOptions, r.User = "", false, nil, ""

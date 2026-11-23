@@ -268,7 +268,7 @@ func run(logger *slog.Logger) error {
 		embeddings    *cache.Embeddings
 	)
 	if cfg.SemanticCache {
-		vectors, err := openVectorRedis(ctx, cfg.VectorRedisURL, logger)
+		vectors, err := newVectorRedis(ctx, cfg.VectorRedisURL, logger)
 		if err != nil {
 			return err
 		}
@@ -384,14 +384,9 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-// semanticEmbedTimeout bounds the embedding call in front of every semantic
-// lookup: a slow embedder makes a request a miss, not a slower request.
 const semanticEmbedTimeout = 2 * time.Second
 
-// openVectorRedis builds the client for the vector Redis. It does not refuse
-// to start when that Redis is down: a lost vector is a miss, so the service
-// answers without the semantic cache and the client keeps reconnecting.
-func openVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*redis.Client, error) {
+func newVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*redis.Client, error) {
 	opts, err := redis.ParseURL(url)
 	if err != nil {
 		return nil, fmt.Errorf("parse VECTOR_REDIS_URL: %w", err)
@@ -406,8 +401,6 @@ func openVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*red
 	return client, nil
 }
 
-// embedders is every registered adapter that also serves embeddings, which is
-// the mock outside production and the OpenAI-compatible vendors.
 func embedders(providers map[provider.Vendor]provider.Provider) map[provider.Vendor]provider.Embedder {
 	out := map[provider.Vendor]provider.Embedder{}
 	for vendor, p := range providers {

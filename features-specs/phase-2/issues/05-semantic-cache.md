@@ -1,7 +1,7 @@
 # 05 Semantic cache in the pipeline
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01, 03, 04
 
 Behind `SEMANTIC_CACHE`, and only for a workspace that turned it on (04):
@@ -17,6 +17,12 @@ refunded, recorded with `cached = true`), with the result labelled
 `semantic_hit` on `gateway.cache`. An embedding failure or timeout is a miss.
 Answers are per workspace only: an integration test must try a cross-tenant
 hit.
+
+## Answer
+
+Built to [the design](../../semantic-cache/design.md). `cache.Semantic` keeps, per workspace and family, a Q8 vector set with an age sorted set and an answer hash, written by one Lua script (cap 1000, oldest first, 7-day idle expiry) in the Redis 8 named by `VECTOR_REDIS_URL`. A vector carries a context hash (the exact key's hash without the last message), and `VSIM` filters on it, so only the last user message may vary. The embed targets are the route's own targets, the family the first of `gemini-embedding-2`, `bge-m3` (and `mock` outside production) that one of them serves. The workspace opts in with `semantic_cache_enabled`. Thresholds are 0.95 for the real families, uncalibrated, and 0.9 for the mock, above its 8-bucket collisions (unrelated text scored 0.80).
+
+Verified end to end through the binary on Redis 8.10.3: a reworded question hits with the first answer; another system prompt, an unrelated question, another workspace and a workspace that did not opt in all miss.
 
 Spec: [Caching and embeddings](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
