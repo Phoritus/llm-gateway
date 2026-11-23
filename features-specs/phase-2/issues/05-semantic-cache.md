@@ -1,7 +1,7 @@
 # 05 Semantic cache in the pipeline
 
 Type: task
-Status: needs-info
+Status: ready-for-agent
 Blocked by: 01, 03, 04
 
 Behind `SEMANTIC_CACHE`, and only for a workspace that turned it on (04):
@@ -27,3 +27,4 @@ Spec: [Caching and embeddings](../../../Backend%20Architecture%20BYOK%20LLM%20Ga
 - 2026-11-18: ticket 02 answered which embedders: see [research.md](../embeddings/research.md) and its open questions for this ticket.
 
 - 2026-11-23: blocked on the owner. Redis stays on Upstash, and Upstash has no vector sets (ticket 01's research). The vectors need another home. The options: keep the `redis:8-alpine` container on the VM for `vec:` keys only, under a second URL; use Upstash Vector, a separate product with its own API; or a vector column in Azure Postgres (pgvector). Recommended: the VM container, because it is already running and ticket 01's design is unchanged. A lost vector is only a miss.
+- 2026-11-23: decided by the owner: the vectors live in the `redis:8-alpine` container on the VM, ticket 01's design unchanged. Everything else stays on Upstash. The container gets its own URL setting (say `VECTOR_REDIS_URL`), read only when `SEMANTIC_CACHE` is on, so `REDIS_URL` keeps pointing at Upstash.

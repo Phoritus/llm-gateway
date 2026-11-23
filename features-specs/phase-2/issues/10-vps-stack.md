@@ -13,8 +13,9 @@ Postgres up, so this ticket writes no `pg_dump` job. What is left:
 - A deploy that restarts without cutting requests. `make deploy` runs
   `docker compose up -d --build` today, which drops the open connections
   for as long as the restart takes. R12's shutdown budget applies.
-- The `redis` service in compose: remove it, since Redis is Upstash, unless
-  ticket 05 decides to keep it for the semantic cache's vectors.
+- The `redis` service in compose stays, for the semantic cache's vectors
+  only (ticket 05). Give it a memory limit like the rest, and keep it off
+  the public ports.
 
 No secret goes in a committed file. The VM reads `deploy/.env.prod`, which the
 scripts refuse to open locally.
