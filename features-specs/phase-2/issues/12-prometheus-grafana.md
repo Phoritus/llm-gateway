@@ -1,20 +1,27 @@
-# 12 Prometheus, Grafana and alerts on the VPS
+# 12 Dashboards and alerts on Grafana Cloud
 
 Type: task
 Status: ready-for-agent
-Blocked by: 10
+Blocked by: -
 
-Phase 2 moves metrics from Grafana Cloud to Prometheus and Grafana on the
-VPS. The service already exports OTLP, so the collector from ticket 10 feeds
-Prometheus and no instrumentation changes. Provision, as committed files: the
-data source, a dashboard (requests by vendor and outcome, time to first
-token, fallback attempts, cache hits, rate-limit rejections, breaker
-openings, upstream errors, usage drops) and the spec's starting alerts (error
-rate, p95 latency, Postgres or Redis down, usage queue nearly full) mailed
-through the SMTP relay. Grafana is not public: behind Caddy with its own
-login, or reachable over SSH only. `make obs-up` already runs a local stack
-to try it against.
+Grafana Cloud stays the observability stack. The owner decided against a
+self-hosted Prometheus and Grafana on 2026-11-23. The service already exports
+OTLP to it, so no instrumentation changes. Commit, as files, and apply them to
+Grafana Cloud:
+
+- A dashboard: requests by vendor and outcome, time to first token, fallback
+  attempts, cache hits, rate-limit rejections, breaker openings, upstream
+  errors and usage drops.
+- The spec's starting alerts: error rate, p95 latency, Postgres or Redis
+  down, and the usage queue nearly full. They go through Grafana Cloud's own
+  contact points (email).
+
+Every label stays inside the free tier's roughly 10k active series (see
+CLAUDE.md on `http.route`). `make obs-up` runs the same Grafana locally to
+build the dashboard against.
 
 Spec: [Observability and background jobs](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+- 2026-11-23: was "Prometheus, Grafana and alerts on the VPS". Rescoped to Grafana Cloud by the owner's decision; no longer blocked by 10.
