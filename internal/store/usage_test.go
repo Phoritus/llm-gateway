@@ -94,6 +94,23 @@ func TestTheRollupCountsCacheHits(t *testing.T) {
 	}
 }
 
+func TestAnEventKeepsWhatContextHandoffDid(t *testing.T) {
+	st := newTestStore(t)
+	ws := signup(t, st, "alice@example.com").WorkspaceID
+	noon := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	trimmed := func(e *UsageEvent) { e.ContextHandoff = HandoffTrimmed }
+
+	writeUsage(t, st, usageEvent(ws, "chat", noon), usageEvent(ws, "chat", noon.Add(time.Minute), trimmed))
+
+	recent, err := st.Recent(context.Background(), ws, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 || recent[0].ContextHandoff != HandoffTrimmed || recent[1].ContextHandoff != "" {
+		t.Fatalf("recent = %+v, want the newest trimmed and the other untouched", recent)
+	}
+}
+
 func TestTheFreeQuotaCatalogIsSeeded(t *testing.T) {
 	st := newTestStore(t)
 	quotas, err := st.FreeQuotas(context.Background())

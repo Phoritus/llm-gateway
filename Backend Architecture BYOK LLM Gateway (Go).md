@@ -104,7 +104,7 @@ A **route** is a user-defined alias such as `my-chat` that maps to an ordered ch
 
 **Where state lives:** skip flags and breaker state are Redis keys with TTLs so every instance agrees and expiry is automatic. A small in-process copy (a second or two) avoids a Redis call on each request.
 
-**Honest exhaustion:** when every target fails, return 429 with `Retry-After` if any failure was a limit, 413 if all were context errors, otherwise 502. Never return 500 for upstream trouble. Set `X-Fallback-Attempts` and `X-Fallback-Trail` headers so users can see what happened.
+**Honest exhaustion:** when every target fails, return 429 with `Retry-After` if any failure was a limit, 400 `context_length_exceeded` (OpenAI's shape, stating the largest window a target stated) if all were context errors, otherwise 502. Never return 500 for upstream trouble. Set `X-Fallback-Attempts` and `X-Fallback-Trail` headers so users can see what happened.
 
 **Free-first quotas:** a Postgres table lists known free limits per provider and model (requests per minute and per day, tokens per minute and per day). Redis token buckets track usage per credential against those limits. This is opt-in per route, with the privacy warning from the proposal.
 
@@ -166,7 +166,7 @@ Every tenant table carries `workspace_id` and every query filters on it. Raw `us
 | `cb:{provider}` | Circuit breaker state | short |
 | `cache:{workspace}:{hash}` | Exact-match response | configurable |
 | `vec:{workspace}` | Semantic index (Phase 2) | none, size capped |
-| `sess:{workspace}:{session}` | Last model and recent messages for handoff (Phase 2) | 3 hours |
+| `ctxwin:{credential}:{model}` | Context window an upstream stated in an error, a number only (Phase 2 context handoff) | 7 days |
 
 Migrations use a versioned tool (goose or golang-migrate; to be chosen). Postgres access via `pgx`.
 

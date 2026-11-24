@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -131,8 +132,12 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if route.FreeFirst && d.Quota != nil {
 			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
 		}
-		res, err := d.Router.Run(ctx, route, d.attempt(req))
-		obs.attempts = res.Attempts()
+		if !d.ContextHandoff {
+			route.ContextHandoff = store.HandoffOff
+		}
+		res, err := d.Router.Run(ctx, route, req, d.attempt)
+		obs.attempts, obs.handoff = res.Attempts(), res.Handoff
+		countHandoff(ctx, res.Handoff)
 		if err != nil && clientGone(ctx) {
 			obs.status, obs.outcome = statusClientClosed, store.OutcomeClientGone
 			return
@@ -171,38 +176,36 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, whole.answer.Response())
 	}
-	if !obs.cached && whole.complete {
+	if !obs.cached && whole.complete && !obs.handoff.Fitted.Changed() {
 		d.storeAnswer(ctx, key.WorkspaceID, cached, obs.target, whole.answer.Response())
 	}
 }
 
 // attempt is one call to one target: the stream opened and its first chunk
 // read, which is as far as failover can still happen.
-func (d Deps) attempt(req *provider.ChatRequest) router.Attempt {
-	return func(parent context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
-		adapter, ok := d.Providers[t.Vendor]
-		if !ok {
-			return nil, nil, router.ErrNoAdapter
-		}
-		upstream := *req
-		upstream.Model = t.Model
-		// Usage is always asked for, whatever the client asked: it is what the
-		// token reservation is reconciled against, and what a non-streaming
-		// answer reports.
-		upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
-
-		wait := router.FirstByteTimeout(t)
-		ctx, cancel, stopWaiting := cancelAfterUnlessStopped(parent, wait)
-		stream, first, err := firstChunk(ctx, adapter, &upstream, t)
-		if timedOut := !stopWaiting(); timedOut && parent.Err() == nil {
-			err = &provider.Error{Kind: provider.ErrTimeout, Detail: "no first chunk within " + wait.String()}
-		}
-		if err != nil {
-			cancel()
-			return stream, nil, err
-		}
-		return cancelOnClose{Stream: stream, cancel: cancel}, first, nil
+func (d Deps) attempt(parent context.Context, t store.ResolvedTarget, req *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
+	adapter, ok := d.Providers[t.Vendor]
+	if !ok {
+		return nil, nil, router.ErrNoAdapter
 	}
+	upstream := *req
+	upstream.Model = t.Model
+	// Usage is always asked for, whatever the client asked: it is what the
+	// token reservation is reconciled against, and what a non-streaming
+	// answer reports.
+	upstream.StreamOptions = &provider.StreamOptions{IncludeUsage: true}
+
+	wait := router.FirstByteTimeout(t)
+	ctx, cancel, stopWaiting := cancelAfterUnlessStopped(parent, wait)
+	stream, first, err := firstChunk(ctx, adapter, &upstream, t)
+	if timedOut := !stopWaiting(); timedOut && parent.Err() == nil {
+		err = &provider.Error{Kind: provider.ErrTimeout, Detail: "no first chunk within " + wait.String()}
+	}
+	if err != nil {
+		cancel()
+		return stream, nil, err
+	}
+	return cancelOnClose{Stream: stream, cancel: cancel}, first, nil
 }
 
 // cancelAfterUnlessStopped is a context deadline that can be called off:
@@ -236,14 +239,36 @@ func (s cancelOnClose) Close() error {
 }
 
 // setFallbackHeaders tells the client which targets its request went
-// through, as vendor/model=outcome in the order they were considered.
+// through, as vendor/model=outcome in the order they were considered, with
+// +trimmed on a target sent a fitted conversation, and what context handoff
+// did to the request.
 func setFallbackHeaders(h http.Header, res router.Result) {
 	trail := make([]string, len(res.Steps))
 	for i, s := range res.Steps {
 		trail[i] = string(s.Vendor) + "/" + headerSafe(s.Model) + "=" + string(s.Outcome)
+		if s.Trimmed {
+			trail[i] += "+trimmed"
+		}
 	}
 	h.Set("X-Fallback-Attempts", strconv.Itoa(res.Attempts()))
 	h.Set("X-Fallback-Trail", strings.Join(trail, ", "))
+	if v := handoffHeader(res.Handoff); v != "" {
+		h.Set("X-Context-Handoff", v)
+	}
+}
+
+// handoffHeader is X-Context-Handoff: the action, then for a trimmed request
+// how much was cut, in counts only.
+func handoffHeader(h router.Handoff) string {
+	switch a := h.Action(); {
+	case a == store.HandoffTrimmed:
+		return fmt.Sprintf("%s; omitted=%d; cleared_tool_results=%d", a, h.Fitted.OmittedMessages, h.Fitted.ClearedToolResults)
+	case a != "":
+		return string(a)
+	case h.TargetRefused:
+		return handoffRefused
+	}
+	return ""
 }
 
 // headerSafe drops what a header value cannot carry. A model name is

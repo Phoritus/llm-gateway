@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"hash/fnv"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -23,6 +25,11 @@ const (
 	ModelContextTooLong = "context-too-long"
 	ModelBreak          = "break"
 )
+
+// ModelWindowPrefix names a model with a context window: "window-8192" echoes
+// a request of up to 8192 prompt tokens and refuses a longer one the way
+// OpenAI does, stating both numbers.
+const ModelWindowPrefix = "window-"
 
 // BreakAfter is how many content chunks ModelBreak sends before it fails.
 const BreakAfter = 3
@@ -46,6 +53,13 @@ func (p *Provider) ChatStream(ctx context.Context, req *provider.ChatRequest, _ 
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "mock failure"}
 	case ModelContextTooLong:
 		return nil, &provider.Error{Kind: provider.ErrContextTooLong, Detail: "mock context limit"}
+	}
+	if window, err := strconv.Atoi(strings.TrimPrefix(model, ModelWindowPrefix)); err == nil && strings.HasPrefix(model, ModelWindowPrefix) {
+		if used := estimateTokens(promptChars(req)); used > window {
+			return nil, provider.ContextTooLong(fmt.Sprintf(
+				"This model's maximum context length is %d tokens. However, your messages resulted in %d tokens.",
+				window, used), "mock context limit")
+		}
 	}
 
 	s := &stream{

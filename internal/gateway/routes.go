@@ -48,6 +48,9 @@ type Deps struct {
 	// Quota puts a free-first route's targets with free quota left first.
 	// Nil leaves every route in its own order.
 	Quota FreeQuota
+	// ContextHandoff applies each route's context_handoff setting. Off, every
+	// route is routed as if set to off: the CONTEXT_HANDOFF switch.
+	ContextHandoff bool
 	// ClientKey names the client's address for the limit on failed
 	// authentications. It must be something the client cannot choose.
 	ClientKey func(*http.Request) string

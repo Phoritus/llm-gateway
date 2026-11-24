@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -65,8 +66,8 @@ func upstreamError(err error) (int, errorDetail, store.Outcome) {
 		return http.StatusTooManyRequests, errorDetail{Type: typeRateLimit, Code: "upstream_rate_limited",
 			Message: "The upstream provider is rate limiting requests. Try again later."}, router.OutcomeRateLimited
 	case errors.Is(err, provider.ErrContextTooLong):
-		return http.StatusRequestEntityTooLarge, errorDetail{Type: typeInvalidRequest, Code: "context_length_exceeded",
-			Message: "The request is longer than the model's context window."}, router.OutcomeContextTooLong
+		return http.StatusBadRequest, errorDetail{Type: typeInvalidRequest, Code: "context_length_exceeded",
+			Message: contextMessage(err)}, router.OutcomeContextTooLong
 	case errors.Is(err, provider.ErrInvalidRequest):
 		return http.StatusBadRequest, errorDetail{Type: typeInvalidRequest, Code: "upstream_invalid_request",
 			Message: "The upstream provider rejected the request as invalid. Check the parameters it was sent."}, router.OutcomeInvalidRequest
@@ -83,6 +84,20 @@ func upstreamError(err error) (int, errorDetail, store.Outcome) {
 		return http.StatusBadGateway, errorDetail{Type: typeServer, Code: "upstream_error",
 			Message: "The upstream provider failed to answer."}, router.OutcomeUpstreamError
 	}
+}
+
+// contextMessage is OpenAI's wording for a request over the window, which
+// clients parse to shorten their own history, with the numbers an upstream
+// stated when it stated them.
+func contextMessage(err error) string {
+	window, requested := provider.ContextLimit(err)
+	switch {
+	case window > 0 && requested > 0:
+		return fmt.Sprintf("This model's maximum context length is %d tokens. However, your messages resulted in %d tokens. Please reduce the length of the messages.", window, requested)
+	case window > 0:
+		return fmt.Sprintf("This model's maximum context length is %d tokens. Please reduce the length of the messages.", window)
+	}
+	return "The request is longer than the model's context window. Please reduce the length of the messages."
 }
 
 // writeUpstreamError answers a failure that happened before the first byte.

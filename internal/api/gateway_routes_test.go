@@ -38,8 +38,8 @@ func TestRoutesCRUD(t *testing.T) {
 	if created.status != http.StatusCreated {
 		t.Fatalf("create: %d %s", created.status, created.raw)
 	}
-	if created.body["cache"] != "auto" {
-		t.Fatalf("a route created without cache must default to auto: %s", created.raw)
+	if created.body["cache"] != "auto" || created.body["context_handoff"] != "reorder" {
+		t.Fatalf("a route created without cache or context_handoff must default to auto and reorder: %s", created.raw)
 	}
 	if created.body["max_hops"] != float64(3) || created.body["free_first"] != false {
 		t.Fatalf("defaults: %s", created.raw)
@@ -58,10 +58,10 @@ func TestRoutesCRUD(t *testing.T) {
 	}
 
 	update := routeBody("renamed", target(cred, "llama-3.1-8b"))
-	update["max_hops"], update["free_first"], update["cache"] = 5, true, "always"
+	update["max_hops"], update["free_first"], update["cache"], update["context_handoff"] = 5, true, "always", "trim"
 	put := alice.do(http.MethodPut, "/api/routes/"+id, update)
 	if put.status != http.StatusOK || put.body["alias"] != "renamed" || put.body["max_hops"] != float64(5) ||
-		put.body["cache"] != "always" {
+		put.body["cache"] != "always" || put.body["context_handoff"] != "trim" {
 		t.Fatalf("put: %d %s", put.status, put.raw)
 	}
 	list = alice.do(http.MethodGet, "/api/routes", nil)
@@ -71,8 +71,8 @@ func TestRoutesCRUD(t *testing.T) {
 
 	reset := alice.do(http.MethodPut, "/api/routes/"+id, routeBody("renamed", target(cred, "m")))
 	if reset.status != http.StatusOK || reset.body["max_hops"] != float64(3) || reset.body["free_first"] != false ||
-		reset.body["cache"] != "auto" {
-		t.Fatalf("put without max_hops, free_first or cache must reset them: %d %s", reset.status, reset.raw)
+		reset.body["cache"] != "auto" || reset.body["context_handoff"] != "reorder" {
+		t.Fatalf("put without max_hops, free_first, cache or context_handoff must reset them: %d %s", reset.status, reset.raw)
 	}
 
 	if res := alice.do(http.MethodDelete, "/api/routes/"+id, nil); res.status != http.StatusNoContent {
@@ -184,6 +184,11 @@ func TestRouteValidation(t *testing.T) {
 		b["cache"] = mode
 		return b
 	}
+	withHandoff := func(mode any) map[string]any {
+		b := routeBody("chat", good)
+		b["context_handoff"] = mode
+		return b
+	}
 	tooMany := make([]map[string]any, 11)
 	for i := range tooMany {
 		tooMany[i] = target(cred, "m"+strings.Repeat("x", i))
@@ -202,6 +207,8 @@ func TestRouteValidation(t *testing.T) {
 		{"unknown cache mode", "cache", withCache("sometimes")},
 		{"cache mode in capitals", "cache", withCache("Always")},
 		{"empty cache mode", "cache", withCache("")},
+		{"unknown context handoff", "context_handoff", withHandoff("summarize")},
+		{"context handoff in capitals", "context_handoff", withHandoff("Trim")},
 		{"no targets", "targets", routeBody("chat")},
 		{"too many targets", "targets", routeBody("chat", tooMany...)},
 		{"bad credential id", "targets", routeBody("chat", target("nope", "m"))},

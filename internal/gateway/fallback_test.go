@@ -94,7 +94,7 @@ func TestAnExhaustedRouteIsAnsweredByWhatItsTargetsSaid(t *testing.T) {
 		{"rate-limited,context-too-long", http.StatusTooManyRequests, "upstream_rate_limited", "90",
 			"2", "mock/rate-limited=rate_limited, mock/context-too-long=context_too_long"},
 		// The second target is the same model, so the same window: not called.
-		{"context-too-long,context-too-long", http.StatusRequestEntityTooLarge, "context_length_exceeded", "",
+		{"context-too-long,context-too-long", http.StatusBadRequest, "context_length_exceeded", "",
 			"1", "mock/context-too-long=context_too_long, mock/context-too-long=skipped"},
 		{"context-too-long,fail", http.StatusBadGateway, "upstream_error", "",
 			"2", "mock/context-too-long=context_too_long, mock/fail=upstream_error"},

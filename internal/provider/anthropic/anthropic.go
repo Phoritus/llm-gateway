@@ -179,7 +179,7 @@ func classify(status int, errType, message string) *provider.Error {
 	case errType == "request_too_large", status == http.StatusRequestEntityTooLarge,
 		strings.Contains(lower, "prompt is too long"), strings.Contains(lower, "context limit"),
 		strings.Contains(lower, "context window"):
-		return kind(provider.ErrContextTooLong)
+		return provider.ContextTooLong(message, detail)
 	case errType == "billing_error", status == http.StatusPaymentRequired,
 		strings.Contains(lower, "credit balance"):
 		return kind(provider.ErrQuota)

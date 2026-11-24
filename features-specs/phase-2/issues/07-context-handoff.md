@@ -1,7 +1,7 @@
 # 07 Context handoff
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06
 
 Build ticket 06's decided design
@@ -36,3 +36,30 @@ switch:
   today and is answered with `trim` on.
 
 ## Comments
+
+## Answer
+
+Built as specified, behind `CONTEXT_HANDOFF`:
+
+- `routes.context_handoff` (`off`, `reorder`, `trim`; default `reorder`) on
+  `POST` and `PUT /api/routes`; `usage_events.context_handoff`, and
+  `context_handoff` on each recent event of `GET /api/usage`.
+- Windows: `provider.ContextTooLong` reads the window and request size out of
+  OpenAI's, OpenRouter's, Groq's, Anthropic's, Mistral's, Gemini's and
+  Cerebras's wording, and the router keeps them in
+  `ctxwin:{credential}:{model}` for 7 days. The catalogue
+  (`internal/handoff/windows.json`) is imported offline from OpenRouter and
+  LiteLLM by `make windows`.
+- `router.Run` reorders, fits each target with a known window on `trim`
+  routes, and calls a target once more, fitted, when its error states a
+  window. The first user message is not pinned.
+- `X-Context-Handoff`, `+trimmed` on the trail, the usage event,
+  `gateway.context_handoff` by action, and no cache store for a trimmed
+  answer.
+- Context exhaustion is 400 `context_length_exceeded` in OpenAI's wording
+  with the largest stated window. The spec and CLAUDE.md changed with it, and
+  the spec's `sess:` row is replaced by `ctxwin:`.
+- Proof: `mock/window-<N>`, and
+  `TestAConversationOverASmallWindowIsTrimmedWhenTheBigTargetIsLimited`:
+  429 with `reorder` or with the switch off, 200 trimmed and uncached with
+  `trim`.

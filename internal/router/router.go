@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"llm-gateway/internal/handoff"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
 )
@@ -53,15 +54,20 @@ func extraWait(t store.ResolvedTarget) time.Duration {
 	return max(0, FirstByteTimeout(t)-DefaultFirstByteTimeout)
 }
 
-// Attempt opens a stream to one target and reads its first chunk, within
-// FirstByteTimeout(t). A stream returned alongside an error is closed by Run.
-type Attempt func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error)
+// Attempt sends req to one target and reads its first chunk, within
+// FirstByteTimeout(t). req is the request as this target is to see it, which
+// context handoff may have fitted to its window. A stream returned alongside
+// an error is closed by Run.
+type Attempt func(ctx context.Context, t store.ResolvedTarget, req *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error)
 
 // Step is what became of one target, in the order the route lists them.
 type Step struct {
 	Vendor  provider.Vendor
 	Model   string
 	Outcome Outcome
+	// Trimmed is set when the target was sent a conversation fitted to its
+	// window.
+	Trimmed bool
 	// Err is why an attempt failed. It is for logs: it can quote the upstream.
 	Err error
 }
@@ -73,6 +79,9 @@ type Result struct {
 	First  *provider.ChatChunk
 	Target store.ResolvedTarget
 	Steps  []Step
+	// Handoff is what context handoff did, filled in whether or not a target
+	// answered.
+	Handoff Handoff
 }
 
 // Attempts is how many targets were called, which leaves out the skipped.
@@ -120,9 +129,16 @@ func (r *Router) Wait() { r.pending.Wait() }
 // target answers, the error is a single *provider.Error standing for all of
 // them: rate limited, with the wait until the earliest limit lifts, if any
 // target was refused or is being skipped for a limit; the failure itself if
-// every attempt failed the same way; otherwise an upstream failure. A context
-// that ends stops the loop and its error is returned as it came.
-func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt Attempt) (Result, error) {
+// every attempt failed the same way, a context error carrying the largest
+// window stated; otherwise an upstream failure. A context that ends stops the
+// loop and its error is returned as it came.
+//
+// Context handoff follows the route's mode. reorder and trim try the targets
+// whose known window fits req first. trim also sends each target with a known
+// window req fitted to it, and a target that refuses req for its length while
+// stating its window is called once more, fitted to that window. Windows
+// stated in errors are kept whatever the mode.
+func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, req *provider.ChatRequest, attempt Attempt) (Result, error) {
 	var (
 		res             Result
 		seen            tally
@@ -130,11 +146,18 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		budgetWithWaits = budget
 		// tooLong holds the models that refused this request for its length.
 		// Another credential for the same model has the same window.
-		tooLong = map[string]bool{}
+		tooLong  = map[string]bool{}
+		refitted = map[int]bool{}
+		scale    = handoff.DefaultRatio
 	)
 	known := r.lookup(ctx, route.Targets)
+	targets, mode := route.Targets, route.ContextHandoff
+	if mode == store.HandoffReorder || mode == store.HandoffTrim {
+		targets, res.Handoff.Reordered = fitsFirst(targets, known, req)
+	}
 
-	for _, t := range route.Targets {
+	for i := 0; i < len(targets); i++ {
+		t := targets[i]
 		now := r.now()
 		if seen.attempts >= max(1, route.MaxHops) {
 			break
@@ -153,14 +176,32 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 		if seen.attempts == 0 {
 			started = now
 		}
+
+		send, fitted := req, handoff.Report{}
+		if w := known.windowOf(t); w > 0 && mode == store.HandoffTrim {
+			var err error
+			send, fitted, err = handoff.Fit(req, handoff.Budget(w, req.MaxTokens, scale))
+			if err != nil {
+				res.Handoff.TargetRefused = true
+				tooLong[t.Model] = true
+				err = &provider.Error{Kind: provider.ErrContextTooLong, Window: w, Detail: err.Error()}
+				seen.failed(ruleFor(err), nil)
+				seen.tooLong(err)
+				step.Outcome, step.Err = OutcomeContextTooLong, err
+				res.Steps = append(res.Steps, step)
+				continue
+			}
+			step.Trimmed = fitted.Changed()
+		}
 		budgetWithWaits += extraWait(t)
 
-		stream, first, err := attempt(ctx, t)
+		stream, first, err := attempt(ctx, t, send)
 		if err == nil {
 			r.succeeded(ctx, t, known)
 			step.Outcome = OutcomeOK
 			res.Steps = append(res.Steps, step)
 			res.Stream, res.First, res.Target = stream, first, t
+			res.Handoff.Fitted = fitted
 			return res, nil
 		}
 		if stream != nil {
@@ -185,7 +226,22 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, attempt At
 			known[key] = s.encode()
 		}
 		if rl.outcome == OutcomeContextTooLong {
-			tooLong[t.Model] = true
+			before := known.windowOf(t)
+			w, requested := provider.ContextLimit(err)
+			if w > 0 {
+				r.learnWindow(ctx, t, w, known)
+			}
+			learned := ratio(requested, send)
+			if learned > 0 {
+				scale = learned
+			}
+			if mode == store.HandoffTrim && w > 0 && !refitted[i] && (w != before || learned > 0) {
+				refitted[i] = true
+				i--
+			} else {
+				tooLong[t.Model] = true
+			}
+			seen.tooLong(err)
 		}
 		seen.failed(rl, placed)
 		step.Outcome, step.Err = rl.outcome, err
@@ -221,7 +277,7 @@ func (r *Router) lookup(ctx context.Context, targets []store.ResolvedTarget) vie
 	known := view{}
 	var missing []string
 	for _, t := range targets {
-		keys := []string{breakerCounter + vendor.id(t)}
+		keys := []string{breakerCounter + vendor.id(t), window.key(t)}
 		for _, subject := range subjects {
 			keys = append(keys, subject.key(t))
 		}
@@ -348,8 +404,15 @@ type tally struct {
 	kind error
 	// limited is set once any target was refused for a limit or is being
 	// skipped for one, and limitUntil is the earliest such skip's end.
-	limited    bool
-	limitUntil time.Time
+	limited                       bool
+	limitUntil                    time.Time
+	widestWindow, widestRequested int
+}
+
+func (t *tally) tooLong(err error) {
+	if w, requested := provider.ContextLimit(err); w > t.widestWindow {
+		t.widestWindow, t.widestRequested = w, requested
+	}
 }
 
 func (t *tally) skipped(s skip) {
@@ -385,6 +448,8 @@ func (t *tally) exhausted(now time.Time) *provider.Error {
 	switch {
 	case t.limited:
 		return &provider.Error{Kind: provider.ErrRateLimited, RetryAfter: max(0, t.limitUntil.Sub(now)), Detail: detail}
+	case t.kind == provider.ErrContextTooLong:
+		return &provider.Error{Kind: t.kind, Detail: detail, Window: t.widestWindow, Requested: t.widestRequested}
 	case t.kind != nil:
 		return &provider.Error{Kind: t.kind, Detail: detail}
 	}
