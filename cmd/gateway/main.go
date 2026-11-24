@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ const (
 	// requests, for what has to run after them: the router's last writes, the
 	// usage flush and the telemetry flush.
 	shutdownReserve = 4 * time.Second
+	deregisterDelay = 3 * time.Second
 	// telemetryReserve is the end of shutdownReserve the usage flush leaves
 	// for the telemetry flush.
 	telemetryReserve = time.Second
@@ -69,6 +71,7 @@ func main() {
 // share one budget because the platform's kill timer does not wait for them
 // one by one.
 type shutdownPlan struct {
+	deregisterBy time.Time
 	// drainBy is when requests still in flight are cut.
 	drainBy time.Time
 	// flushBy is when the usage flush stops, leaving the rest to telemetry.
@@ -78,10 +81,12 @@ type shutdownPlan struct {
 
 func planShutdown(signalled time.Time, budget time.Duration) shutdownPlan {
 	stopBy := signalled.Add(budget)
+	drainBy := stopBy.Add(-shutdownReserve)
 	return shutdownPlan{
-		drainBy: stopBy.Add(-shutdownReserve),
-		flushBy: stopBy.Add(-telemetryReserve),
-		stopBy:  stopBy,
+		deregisterBy: signalled.Add(min(deregisterDelay, drainBy.Sub(signalled)/2)),
+		drainBy:      drainBy,
+		flushBy:      stopBy.Add(-telemetryReserve),
+		stopBy:       stopBy,
 	}
 }
 
@@ -224,11 +229,12 @@ func run(logger *slog.Logger) error {
 	// Redis counts: the control plane's rate limiting refuses requests when it
 	// is unavailable, so an instance without it cannot serve a login. /v1 keeps
 	// answering through its in-process limiter until the instance is dropped.
+	var draining atomic.Bool
 	checks := []api.Check{
 		{Name: "postgres", Ping: st.Ping},
 		{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
 	}
-	api.Health(logger, checks...)(mux)
+	api.Health(logger, draining.Load, checks...)(mux)
 	if err := st.RegisterMetrics(); err != nil {
 		return err
 	}
@@ -361,6 +367,8 @@ func run(logger *slog.Logger) error {
 	// maxShutdownDelaySeconds raises it, to 300s at most. A step that ran past
 	// the budget would be killed part-way, so each one gets a deadline inside it.
 	plan = planShutdown(time.Now(), cfg.ShutdownTimeout)
+	draining.Store(true)
+	time.Sleep(time.Until(plan.deregisterBy))
 
 	// A request still running at drainBy is cut. With the defaults that is any
 	// stream older than about 20s, far short of V1_REQUEST_TIMEOUT: streams

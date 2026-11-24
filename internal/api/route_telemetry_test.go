@@ -32,7 +32,7 @@ func instrumented(t *testing.T, api http.Handler) (http.Handler, *sdkmetric.Manu
 		sdktrace.WithSampler(sdktrace.AlwaysSample()))
 
 	mux := http.NewServeMux()
-	Health(nil)(mux)
+	Health(nil, nil)(mux)
 	mux.Handle("/api/", http.StripPrefix("/api", api))
 
 	h := otelhttp.NewHandler(telemetry.Route(mux), "http.server",

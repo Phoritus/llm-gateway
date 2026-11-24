@@ -2,8 +2,9 @@
 # Usage: scripts/vm.sh ssh | deploy | logs
 #
 #   ssh     open a shell on the VM, in ~/llm-gateway/deploy (the default)
-#   deploy  pull main on the VM, then rebuild and restart the stack in deploy/
-#   logs    follow the gateway's logs
+#   deploy  pull main on the VM, then deploy/roll.sh: rebuild and restart the
+#           gateways one at a time, so no request is dropped
+#   logs    follow both gateways' logs
 #
 # VM_HOST, VM_USER and VM_KEY come from the environment or ENV_FILE
 # (.env.dev).
@@ -31,12 +32,10 @@ deploy)
 	ssh -i "$VM_KEY" "$target" 'set -e
 		cd ~/llm-gateway
 		git pull --ff-only
-		cd deploy
-		docker compose up -d --build
-		docker compose ps'
+		bash deploy/roll.sh'
 	;;
 logs)
-	exec ssh -t -i "$VM_KEY" "$target" 'cd ~/llm-gateway/deploy && docker compose logs -f --tail=100 gateway'
+	exec ssh -t -i "$VM_KEY" "$target" 'cd ~/llm-gateway/deploy && docker compose logs -f --tail=100 gateway-a gateway-b'
 	;;
 *)
 	die "usage: scripts/vm.sh ssh | deploy | logs"
