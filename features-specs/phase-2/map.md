@@ -203,6 +203,14 @@ point), `grilling` needs the user's decisions before anything is built,
   own page; each needs an `UPDATE model_prices` then (from ticket 18).
 - A free-quota model costs nothing even on a paid key, since the gateway
   cannot tell a free key from a paid one (from ticket 18).
+- An embedding for the semantic cache is not counted against any budget: it
+  has no price row and its usage is not read. A spent blocking budget skips
+  the lookup, but one that still routes to free targets does not, so its
+  embedding may land on a paid key (from ticket 18's review).
+- `PUT /api/workspace/settings` replaces the whole document, so the dashboard
+  must send `monthly_budget_usd` and `budget_action` back unchanged when it
+  edits another setting, or the PUT removes the budget (from ticket 18's
+  review).
 - Mistral has no price rows: its pricing page names models without the API
   ids a route uses (from ticket 18).
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`

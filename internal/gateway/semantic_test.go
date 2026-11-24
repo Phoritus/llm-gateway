@@ -107,7 +107,7 @@ type semanticFixture struct {
 	vectors *vectorCache
 }
 
-func semanticServer(t *testing.T, semantic map[string]bool) semanticFixture {
+func semanticServer(t *testing.T, semantic map[string]bool, opts ...func(*Deps)) semanticFixture {
 	t.Helper()
 	routes := twoWorkspaces{semantic: semantic}
 	vectors := &vectorCache{entries: map[string][]vectorEntry{}}
@@ -118,6 +118,9 @@ func semanticServer(t *testing.T, semantic map[string]bool) semanticFixture {
 	d.Keys, d.Routes, d.Usage, d.Cache = routes, routes, f.usage, f.cache
 	d.Semantic = vectors
 	d.Embeddings = cache.NewEmbeddings(map[provider.Vendor]provider.Embedder{provider.VendorMock: &mock.Provider{}}, time.Second)
+	for _, opt := range opts {
+		opt(&d)
+	}
 	f.srv = httptest.NewServer(http.StripPrefix("/v1", Routes(d)))
 	t.Cleanup(f.srv.Close)
 	return f

@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"llm-gateway/internal/budget"
+	"llm-gateway/internal/cache"
 	"llm-gateway/internal/provider"
+	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/store"
 )
 
@@ -253,5 +255,50 @@ func TestWithoutABudgetNoBudgetHeaderIsSet(t *testing.T) {
 		if got := resp.Header.Get(h); got != "" {
 			t.Errorf("%s = %q, want none", h, got)
 		}
+	}
+}
+
+// countingEmbedder is the mock's embedder, counting its calls.
+type countingEmbedder struct {
+	mock.Provider
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *countingEmbedder) Embed(ctx context.Context, req *provider.EmbedRequest, cred provider.Credential) (*provider.EmbedResponse, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+	return e.Provider.Embed(ctx, req, cred)
+}
+
+// An embedding is an upstream call on the workspace's key, so a request the
+// budget refuses must not make one.
+func TestASpentBlockingBudgetRefusesBeforeAnyEmbedding(t *testing.T) {
+	b := pricedBudget(t)
+	b.set(spentWorkspace(store.Budget{MicroUSD: 5_000_000, Action: budget.Block}))
+	embedder := &countingEmbedder{}
+	f := semanticServer(t, map[string]bool{"ws1": true}, func(d *Deps) {
+		d.Budget = b
+		d.Routes = budgetedRoutes{RouteResolver: d.Routes, limit: store.Budget{MicroUSD: 5_000_000, Action: budget.Block}}
+		d.Embeddings = cache.NewEmbeddings(map[provider.Vendor]provider.Embedder{provider.VendorMock: embedder}, time.Second)
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "echo",
+		"messages": []map[string]string{{"role": "user", "content": question}},
+	})
+	resp := postAs(t, f.srv, "Bearer "+testKey, string(body))
+	drain(resp)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", resp.StatusCode)
+	}
+	embedder.mu.Lock()
+	defer embedder.mu.Unlock()
+	if embedder.calls != 0 {
+		t.Errorf("the embedder was called %d times, want none", embedder.calls)
+	}
+	if n := f.vectors.lookupCount(); n != 0 {
+		t.Errorf("the semantic cache was searched %d times, want none", n)
 	}
 }

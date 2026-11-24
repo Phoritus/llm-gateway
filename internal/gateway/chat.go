@@ -119,6 +119,21 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		charged = &cost
 	)
 	cached := d.lookupCache(r, key.WorkspaceID, route, req)
+	if cached.hit == nil {
+		if cached.key != "" {
+			w.Header().Set("X-Cache", "MISS")
+		}
+		targets, ok := d.budgetTargets(w, r, obs.budgets, route.Targets)
+		if !ok {
+			if cached.missed {
+				countCache(cacheMiss)
+			}
+			obs.status, obs.outcome = http.StatusTooManyRequests, outcomeBudgetExceeded
+			return
+		}
+		route.Targets = targets
+		d.lookupSemantic(ctx, key.WorkspaceID, route, req, &cached)
+	}
 	if cached.hit != nil {
 		// The stored answer is sent as a stream, by the code that sends a live
 		// one. The usage it carries was spent by the request that stored it,
@@ -134,15 +149,6 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(headerCostBasis, string(budget.Cached))
 		}
 	} else {
-		if cached.key != "" {
-			w.Header().Set("X-Cache", "MISS")
-		}
-		targets, ok := d.budgetTargets(w, r, obs.budgets, route.Targets)
-		if !ok {
-			obs.status, obs.outcome = http.StatusTooManyRequests, outcomeBudgetExceeded
-			return
-		}
-		route.Targets = targets
 		if route.FreeFirst && d.Quota != nil {
 			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
 		}

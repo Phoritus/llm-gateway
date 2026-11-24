@@ -60,7 +60,10 @@ type cacheLookup struct {
 	// key is empty when the request is not cacheable, or the cache is off.
 	key string
 	// hit is the stored answer, when there is one.
-	hit      *cache.Entry
+	hit *cache.Entry
+	// missed is set when the exact cache answered that it holds nothing,
+	// which is when the semantic cache is worth asking.
+	missed   bool
 	semantic *semanticQuery
 }
 
@@ -70,8 +73,9 @@ type semanticQuery struct {
 	vector  cache.Vector
 }
 
-// lookupCache is step 4 of the pipeline. It never fails the request: a cache
-// that errors, or holds something unreadable, is a miss.
+// lookupCache is step 4 of the pipeline, the exact half. It never fails the
+// request: a cache that errors, or holds something unreadable, is a miss. A
+// clean miss is counted by lookupSemantic, which runs after the budget check.
 func (d Deps) lookupCache(r *http.Request, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) cacheLookup {
 	if d.Cache == nil {
 		return cacheLookup{}
@@ -87,23 +91,30 @@ func (d Deps) lookupCache(r *http.Request, workspaceID string, route *store.Reso
 		return cacheLookup{}
 	}
 	hit, err := d.Cache.Get(ctx, key)
-	var query *semanticQuery
 	switch {
 	case err != nil:
 		d.logCache(ctx, "cache lookup failed, treated as a miss", err)
 	case hit != nil:
 		countCache(cacheHit)
-	default:
-		if hit, query = d.lookupSemantic(ctx, workspaceID, route, req); hit != nil {
-			countCache(cacheSemanticHit)
-		} else {
-			countCache(cacheMiss)
-		}
 	}
-	return cacheLookup{key: key, hit: hit, semantic: query}
+	return cacheLookup{key: key, hit: hit, missed: err == nil && hit == nil}
 }
 
-func (d Deps) lookupSemantic(ctx context.Context, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) (*cache.Entry, *semanticQuery) {
+// lookupSemantic asks the semantic cache after a clean exact miss. It runs
+// after the budget check, since an embedding is an upstream call, and only
+// for a request the budgets let through.
+func (d Deps) lookupSemantic(ctx context.Context, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest, cached *cacheLookup) {
+	if !cached.missed {
+		return
+	}
+	if cached.hit, cached.semantic = d.semanticQuery(ctx, workspaceID, route, req); cached.hit != nil {
+		countCache(cacheSemanticHit)
+	} else {
+		countCache(cacheMiss)
+	}
+}
+
+func (d Deps) semanticQuery(ctx context.Context, workspaceID string, route *store.ResolvedRoute, req *provider.ChatRequest) (*cache.Entry, *semanticQuery) {
 	if d.Semantic == nil || d.Embeddings == nil || !route.Settings.SemanticCache {
 		return nil, nil
 	}
