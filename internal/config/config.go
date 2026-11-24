@@ -68,11 +68,12 @@ type Config struct {
 	RedisURL       string
 	// VectorRedisURL names the Redis 8 that holds the semantic cache's
 	// vectors. Set only when SemanticCache is on: Upstash has no vector sets.
-	VectorRedisURL string
-	MasterKey      []byte
-	SessionSecret  []byte
-	SessionTTL     time.Duration
-	SessionIdleTTL time.Duration
+	VectorRedisURL     string
+	MasterKey          []byte
+	PreviousMasterKeys [][]byte
+	SessionSecret      []byte
+	SessionTTL         time.Duration
+	SessionIdleTTL     time.Duration
 	// VerificationTTL and ResetTTL bound the two email-delivered tokens. A
 	// reset token is short-lived because it is a password bypass; a
 	// verification token is only a proof of address.
@@ -184,6 +185,17 @@ func Load() (*Config, error) {
 			fail("MASTER_KEY must decode to %d bytes, got %d", masterKeyLen, len(key))
 		} else {
 			cfg.MasterKey = key
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("MASTER_KEY_PREVIOUS")); raw != "" {
+		for i, part := range strings.Split(raw, ",") {
+			key, err := decodeKey(strings.TrimSpace(part))
+			if err != nil || len(key) != masterKeyLen {
+				fail("MASTER_KEY_PREVIOUS entry %d must be base64 of %d bytes", i+1, masterKeyLen)
+				continue
+			}
+			cfg.PreviousMasterKeys = append(cfg.PreviousMasterKeys, key)
 		}
 	}
 

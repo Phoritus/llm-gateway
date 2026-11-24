@@ -61,10 +61,58 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	if err := run(logger); err != nil {
+	command := run
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "rotate-keys":
+			command = rotateKeys
+		default:
+			logger.Error("unknown command; the only one is rotate-keys", slog.String("command", os.Args[1]))
+			os.Exit(2)
+		}
+	}
+	if err := command(logger); err != nil {
 		logger.Error("startup failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+const resealBatch = 100
+
+func rotateKeys(logger *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	st, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+	keyring, err := crypto.NewKeyring(cfg.MasterKey, cfg.PreviousMasterKeys...)
+	if err != nil {
+		return err
+	}
+	creds := store.NewCredentials(st, keyring)
+	resealed, err := creds.Reseal(ctx, resealBatch)
+	logger.Info("re-sealed provider credentials", slog.Int("count", resealed), slog.String("current_key", string(keyring.Current())))
+	if err != nil {
+		return err
+	}
+	usage, err := creds.KeyUsage(ctx)
+	if err != nil {
+		return err
+	}
+	for id, n := range usage {
+		logger.Info("credentials sealed under key", slog.String("key_id", string(id)), slog.Int("count", n),
+			slog.Bool("current", id == keyring.Current()))
+	}
+	return nil
 }
 
 // shutdownPlan is when each step of a graceful shutdown gives up. The steps
@@ -152,7 +200,7 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("schema is up to date")
 
-	keyring, err := crypto.NewKeyring(cfg.MasterKey)
+	keyring, err := crypto.NewKeyring(cfg.MasterKey, cfg.PreviousMasterKeys...)
 	if err != nil {
 		return err
 	}
