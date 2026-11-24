@@ -1,7 +1,7 @@
 # 08 SSRF-guarded HTTP client
 
 Type: task
-Status: ready-for-agent
+Status: resolved
 Blocked by: -
 
 Custom endpoints (09) let a user name a URL the gateway will call, which is
@@ -24,3 +24,16 @@ Table tests for each address class, and a test that a hostname resolving to
 Spec: [Security](../../../Backend%20Architecture%20BYOK%20LLM%20Gateway%20(Go).md).
 
 ## Comments
+
+## Answer
+
+`internal/egress`. `Check` refuses an address in any of IANA's special-purpose
+ranges that are not the public internet (loopback, private, link-local and the
+metadata address, CGNAT, multicast, unspecified, broadcast, documentation,
+benchmarking, unique local), judging an IPv4-mapped IPv6 address as its IPv4
+form, and refuses NAT64, 6to4 and Teredo outright since they can carry a
+private IPv4 address. `Transport` checks every resolved address in the
+dialer's `Control`, after resolution, and takes no proxy from the environment.
+`Client` calls only https and returns a redirect instead of following it.
+Tests: one per address class, and a `localhost` URL that a plain client
+reaches and the guarded one refuses at dial time.
