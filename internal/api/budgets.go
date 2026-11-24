@@ -55,6 +55,12 @@ func (f *budgetFields) budget(w http.ResponseWriter) (*store.Budget, bool) {
 		invalidField(w, "monthly_budget_usd", "monthly_budget_usd must be a number of USD from 0 to 1000000000, or null for no budget.")
 		return nil, false
 	}
+	// Rounded to nothing, a tiny budget would become $0 and block every paid
+	// request.
+	if usd != 0 && usd < 1e-6 {
+		invalidField(w, "monthly_budget_usd", "monthly_budget_usd is kept in whole micro-dollars: use 0, or at least 0.000001.")
+		return nil, false
+	}
 	return &store.Budget{MicroUSD: int64(math.Round(usd * 1e6)), Action: f.BudgetAction}, true
 }
 

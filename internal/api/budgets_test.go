@@ -107,6 +107,7 @@ func TestBudgetFieldsAreValidated(t *testing.T) {
 	}{
 		{map[string]any{"monthly_budget_usd": -1}, "monthly_budget_usd"},
 		{map[string]any{"monthly_budget_usd": 2e9}, "monthly_budget_usd"},
+		{map[string]any{"monthly_budget_usd": 0.0000004}, "micro-dollars"},
 		{map[string]any{"monthly_budget_usd": 5, "budget_action": "sometimes"}, "budget_action"},
 	} {
 		if res := alice.do(http.MethodPut, "/api/workspace/settings", c.body); res.status != http.StatusBadRequest || !strings.Contains(res.raw, c.param) {
@@ -118,6 +119,9 @@ func TestBudgetFieldsAreValidated(t *testing.T) {
 		}
 	}
 
+	if res := alice.do(http.MethodPut, "/api/workspace/settings", map[string]any{"monthly_budget_usd": 0.000001}); res.status != http.StatusOK || res.body["monthly_budget_usd"] != 0.000001 {
+		t.Errorf("one micro-dollar: %d %s", res.status, res.raw)
+	}
 	put := alice.do(http.MethodPut, "/api/workspace/settings", map[string]any{"monthly_budget_usd": 12.5, "budget_action": "warn"})
 	if put.status != http.StatusOK || put.body["monthly_budget_usd"] != 12.5 || put.body["budget_action"] != "warn" {
 		t.Fatalf("put: %d %s", put.status, put.raw)
