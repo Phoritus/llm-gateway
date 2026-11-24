@@ -79,7 +79,7 @@ func (e *Embeddings) Plan(targets []store.ResolvedTarget) (fam Family, plan []Em
 		plan = plan[:0:0]
 		for _, t := range targets {
 			if _, serves := fam.Models[t.Vendor]; serves && e.adapters[t.Vendor] != nil {
-				plan = append(plan, EmbedTarget{Vendor: t.Vendor, Cred: provider.Credential{APIKey: t.Secret}})
+				plan = append(plan, EmbedTarget{Vendor: t.Vendor, Cred: provider.Credential{APIKey: t.Secret, BaseURL: t.BaseURL}})
 			}
 		}
 		if len(plan) > 0 {

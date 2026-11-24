@@ -23,15 +23,14 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 07, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
+**Done:** 01 to 09, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
 compose stack with Caddy and `make deploy` from 10.
 
 **Next, for an agent, in this order:**
 
-1. **08 then 09.** The SSRF guard, then custom endpoints behind it.
-2. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
+1. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
    requests.
-3. **12 Dashboards and alerts on Grafana Cloud.**
+2. **12 Dashboards and alerts on Grafana Cloud.**
 
 **Next, for the owner:**
 
@@ -74,7 +73,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [07](issues/07-context-handoff.md) | Context handoff | task | `resolved` | 06 |
 | **Custom endpoints** | | | | |
 | [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `resolved` | - |
-| [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `ready-for-agent` | 08 |
+| [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `resolved` | 08 |
 | **The VM and observability** | | | | |
 | [10](issues/10-vps-stack.md) | Finish the VM stack: memory limits, a deploy that does not cut requests | task | `ready-for-agent` | - |
 | [11](issues/11-provision-vps.md) | Provision the VM, DNS and secrets | task | `resolved` | - |

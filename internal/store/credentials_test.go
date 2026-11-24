@@ -160,6 +160,46 @@ func TestCredentialProviderIsBoundToItsCiphertext(t *testing.T) {
 	}
 }
 
+func TestACustomCredentialsBaseURLIsBoundToItsCiphertext(t *testing.T) {
+	st := newTestStore(t)
+	c := newTestCredentials(t, st)
+	ctx := context.Background()
+	ws := signup(t, st, "a@example.com").WorkspaceID
+	cred, err := c.Create(ctx, ws, NewCredential{Provider: provider.VendorCustom, Name: "mine", Secret: testSecret,
+		BaseURL: "https://llm.example.com/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.BaseURL != "https://llm.example.com/v1" {
+		t.Errorf("BaseURL = %q", cred.BaseURL)
+	}
+	open, err := c.Unseal(ctx, ws, cred.ID)
+	if err != nil || open.Secret != testSecret || open.BaseURL != cred.BaseURL {
+		t.Fatalf("Unseal = %+v, %v", open, err)
+	}
+
+	if _, err := st.pool.Exec(ctx, `UPDATE provider_credentials SET base_url = 'https://attacker.example/v1' WHERE id = $1`, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Unseal(ctx, ws, cred.ID); !errors.Is(err, crypto.ErrOpen) {
+		t.Fatalf("Unseal after the base URL changed: %v, want ErrOpen", err)
+	}
+}
+
+func TestOnlyACustomCredentialHasABaseURL(t *testing.T) {
+	st := newTestStore(t)
+	c := newTestCredentials(t, st)
+	ctx := context.Background()
+	ws := signup(t, st, "a@example.com").WorkspaceID
+	if _, err := c.Create(ctx, ws, NewCredential{Provider: provider.VendorCustom, Name: "x", Secret: testSecret}); err == nil {
+		t.Error("a custom credential without a base URL was stored")
+	}
+	if _, err := c.Create(ctx, ws, NewCredential{Provider: provider.VendorGroq, Name: "x", Secret: testSecret,
+		BaseURL: "https://llm.example.com/v1"}); err == nil {
+		t.Error("a groq credential with a base URL was stored")
+	}
+}
+
 func TestCredentialLimit(t *testing.T) {
 	st := newTestStore(t)
 	c := newTestCredentials(t, st)

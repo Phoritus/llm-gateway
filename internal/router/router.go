@@ -288,7 +288,7 @@ func (r *Router) lookup(ctx context.Context, targets []store.ResolvedTarget) vie
 	known := view{}
 	var missing []string
 	for _, t := range targets {
-		keys := []string{breakerCounter + vendor.id(t), window.key(t)}
+		keys := []string{breakerCounter + breaker.id(t), window.key(t)}
 		for _, subject := range subjects {
 			keys = append(keys, subject.key(t))
 		}
@@ -360,7 +360,7 @@ func (r *Router) failed(ctx context.Context, t store.ResolvedTarget, rl rule, hi
 			// Only the failure that reached the threshold opens the breaker;
 			// the ones after it extend it. The store hands each count to one
 			// caller, so concurrent failures and other instances agree on which.
-			if e.subject.prefix == vendor.prefix && repeat == 1 {
+			if e.subject.prefix == breaker.prefix && repeat == 1 {
 				breakerOpened.Add(ctx, 1, metric.WithAttributes(attribute.String("vendor", string(t.Vendor))))
 			}
 			entries = append(entries, Entry{Key: e.subject.key(t), Value: s.encode(), TTL: ttl})
@@ -373,7 +373,7 @@ func (r *Router) failed(ctx context.Context, t store.ResolvedTarget, rl rule, hi
 
 // succeeded clears the vendor's failure count, when the request saw one.
 func (r *Router) succeeded(ctx context.Context, t store.ResolvedTarget, known view) {
-	key := breakerCounter + vendor.id(t)
+	key := breakerCounter + breaker.id(t)
 	if known[key] == "" {
 		return
 	}

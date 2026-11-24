@@ -12,8 +12,16 @@ import (
 // MaxLine bounds one line.
 const MaxLine = 1 << 20
 
-// ErrLineTooLong is a line longer than MaxLine.
-var ErrLineTooLong = errors.New("sse: line too long")
+// MaxEvent bounds one event's data, all its lines together: an upstream a
+// user chose may never end an event.
+const MaxEvent = 4 << 20
+
+var (
+	// ErrLineTooLong is a line longer than MaxLine.
+	ErrLineTooLong = errors.New("sse: line too long")
+	// ErrEventTooLong is an event whose data is longer than MaxEvent.
+	ErrEventTooLong = errors.New("sse: event too long")
+)
 
 // Event is one dispatched event. Data is its data lines joined by "\n".
 type Event struct {
@@ -56,6 +64,9 @@ func (s *Reader) Next() (Event, error) {
 		value = bytes.TrimPrefix(value, []byte(" "))
 		switch string(field) {
 		case "data":
+			if len(ev.Data)+len(value) >= MaxEvent {
+				return Event{}, ErrEventTooLong
+			}
 			if hasData {
 				ev.Data = append(ev.Data, '\n')
 			}

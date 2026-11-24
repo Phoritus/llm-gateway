@@ -216,7 +216,7 @@ func cancelAfterUnlessStopped(parent context.Context, d time.Duration) (ctx cont
 }
 
 func firstChunk(ctx context.Context, adapter provider.Provider, req *provider.ChatRequest, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
-	stream, err := adapter.ChatStream(ctx, req, provider.Credential{APIKey: t.Secret})
+	stream, err := adapter.ChatStream(ctx, req, provider.Credential{APIKey: t.Secret, BaseURL: t.BaseURL})
 	if err != nil {
 		return nil, nil, err
 	}
