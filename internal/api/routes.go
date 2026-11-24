@@ -44,7 +44,10 @@ type Deps struct {
 	Auth        *auth.Service
 	Limiter     *ratelimit.Limiter
 	Mailer      auth.Mailer
-	Logger      *slog.Logger
+	// Budgets reads spend for the budget fields. Nil shows every spend as
+	// unknown.
+	Budgets BudgetLedger
+	Logger  *slog.Logger
 }
 
 func (d Deps) logger() *slog.Logger {
@@ -116,6 +119,7 @@ func Routes(d Deps) http.Handler {
 			r.Get("/gateway-keys", d.handleListGatewayKeys)
 			r.Post("/gateway-keys", d.handleCreateGatewayKey)
 			r.Delete("/gateway-keys/{id}", d.handleRevokeGatewayKey)
+			r.Put("/gateway-keys/{id}/budget", d.handlePutGatewayKeyBudget)
 
 			r.Get("/routes", d.handleListRoutes)
 			r.Post("/routes", d.handleCreateRoute)
@@ -260,27 +264,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 // -- registering them would let a body carry that key and have it dropped in
 // silence, which is the outcome rejecting unknown fields exists to prevent.
 //
+// An embedded struct without a name of its own contributes its fields, as it
+// does to encoding/json, whether or not its type is exported.
+//
 // A dst that is not a pointer to a struct has no known fields, so every key is
 // unknown and the request is refused. That state is a wiring mistake, and a
 // wiring mistake inside a validator must not fail open.
 func unknownFields(dst any, fields map[string]json.RawMessage) []string {
 	known := make(map[string]struct{})
 	if t := reflect.TypeOf(dst); t != nil && t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct {
-		t = t.Elem()
-		for i := range t.NumField() {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-			if name == "-" {
-				continue
-			}
-			if name == "" {
-				name = field.Name
-			}
-			known[strings.ToLower(name)] = struct{}{}
-		}
+		addKnownFields(known, t.Elem())
 	}
 
 	var unknown []string
@@ -294,6 +287,27 @@ func unknownFields(dst any, fields map[string]json.RawMessage) []string {
 	// from one call to the next.
 	slices.Sort(unknown)
 	return unknown
+}
+
+func addKnownFields(known map[string]struct{}, t reflect.Type) {
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if field.Anonymous && name == "" && field.Type.Kind() == reflect.Struct {
+			addKnownFields(known, field.Type)
+			continue
+		}
+		if !field.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		known[strings.ToLower(name)] = struct{}{}
+	}
 }
 
 // limitPerUser applies the authenticated ceiling, keyed on the caller's user

@@ -23,11 +23,10 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 12, 15 to 17.
+**Done:** 01 to 12, 15 to 18.
 
-**Next, for an agent, in this order:**
-
-1. **18**, which needs nothing from the owner: budgets.
+**Next, for an agent:** nothing. Every agent ticket is resolved; what is
+left is the owner's.
 
 **Next, for the owner:**
 
@@ -88,7 +87,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `resolved` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `resolved` | - |
 | [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `resolved` | 04 |
-| [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `ready-for-agent` | 04 |
+| [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `resolved` | 04 |
 | [19](issues/19-members-and-invites.md) | ~~Workspace members, invites and the role column~~ (cut) | grilling | `wontfix` | - |
 
 01, 02, 04 and 08 can run in parallel, and so can 15 and 16 at any time.
@@ -176,6 +175,12 @@ point), `grilling` needs the user's decisions before anything is built,
   their retention runs out, so an accidental toggle loses nothing, and
   `DELETE /api/logs` removes them at once. Logs get their own small queue,
   sharing usage's code through `batch.Queue[T]` but not its 10000 slots.
+- Ticket 18 (budgets): money is int64 micro-USD, priced after the answer
+  from reported usage and never reserved, so overshoot is bounded by the
+  requests in flight. An unpriced model costs nothing and says so rather than
+  being refused. The check runs on a cache miss right before routing, so a
+  hit is served past a budget. Spend is a Redis counter per scope and UTC
+  month; mails at 80% and 100% go out once per month through SET NX.
 
 ## Fog
 
@@ -187,5 +192,26 @@ point), `grilling` needs the user's decisions before anything is built,
 - A window learned from an error is only ever lowered or replaced by another
   error, never raised by a success, so a small one learned on a free tier
   keeps trimming for its 7 days (from ticket 07's review).
+- Cached input tokens: `model_prices.cached_input_usd_per_mtok` is stored but
+  unused, because `provider.Usage` carries no cached-token count. Answers that
+  read a vendor's prompt cache are charged at the full input price, so spend
+  errs high (from ticket 18).
+- A price is one number per model. Anthropic's Haiku 5.5 over 100k prompt
+  tokens and OpenAI's long-context tier cost more than the seeded lower tier,
+  so spend errs low on long prompts. Gemini 4 Carbon's row goes stale on
+  2026-12-01 and the Gemini 3.8 and 3.6 Flash rows on 2027-01-01, by Google's
+  own page; each needs an `UPDATE model_prices` then (from ticket 18).
+- A free-quota model costs nothing even on a paid key, since the gateway
+  cannot tell a free key from a paid one (from ticket 18).
+- An embedding for the semantic cache is not counted against any budget: it
+  has no price row and its usage is not read. A spent blocking budget skips
+  the lookup, but one that still routes to free targets does not, so its
+  embedding may land on a paid key (from ticket 18's review).
+- `PUT /api/workspace/settings` replaces the whole document, so the dashboard
+  must send `monthly_budget_usd` and `budget_action` back unchanged when it
+  edits another setting, or the PUT removes the budget (from ticket 18's
+  review).
+- Mistral has no price rows: its pricing page names models without the API
+  ids a route uses (from ticket 18).
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`
   stops re-deriving the burst clamp (from R23's review).

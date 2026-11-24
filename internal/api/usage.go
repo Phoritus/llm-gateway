@@ -16,16 +16,18 @@ const (
 )
 
 type usageDayView struct {
-	Day              string `json:"day"`
-	Route            string `json:"route"`
-	Vendor           string `json:"vendor"`
-	Model            string `json:"model"`
-	Requests         int64  `json:"requests"`
-	Errors           int64  `json:"errors"`
-	PromptTokens     int64  `json:"prompt_tokens"`
-	CompletionTokens int64  `json:"completion_tokens"`
-	AvgLatencyMs     int64  `json:"avg_latency_ms"`
-	CacheHits        int64  `json:"cache_hits"`
+	Day              string  `json:"day"`
+	Route            string  `json:"route"`
+	Vendor           string  `json:"vendor"`
+	Model            string  `json:"model"`
+	Requests         int64   `json:"requests"`
+	Errors           int64   `json:"errors"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	AvgLatencyMs     int64   `json:"avg_latency_ms"`
+	CacheHits        int64   `json:"cache_hits"`
+	CostUSD          float64 `json:"cost_usd"`
+	UnpricedRequests int64   `json:"unpriced_requests"`
 }
 
 type usageEventView struct {
@@ -42,6 +44,8 @@ type usageEventView struct {
 	TTFTMs           int                  `json:"ttft_ms"`
 	Cached           bool                 `json:"cached"`
 	ContextHandoff   *store.HandoffAction `json:"context_handoff"`
+	// CostUSD is null for a request that could not be priced.
+	CostUSD *float64 `json:"cost_usd"`
 }
 
 // handleUsage is GET /api/usage: the daily rollup for a range of UTC days, and
@@ -73,7 +77,7 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 		dayViews[i] = usageDayView{
 			Day: u.Day.Format(usageDateLayout), Route: u.RouteAlias, Vendor: u.Vendor, Model: u.Model,
 			Requests: u.Requests, Errors: u.Errors, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
-			CacheHits: u.CacheHits,
+			CacheHits: u.CacheHits, CostUSD: usdOf(u.CostMicroUSD), UnpricedRequests: u.Unpriced,
 		}
 		if u.Requests > 0 {
 			dayViews[i].AvgLatencyMs = u.LatencyMsSum / u.Requests
@@ -89,8 +93,19 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 		if e.ContextHandoff != "" {
 			eventViews[i].ContextHandoff = &e.ContextHandoff
 		}
+		if e.CostMicroUSD != nil {
+			cost := usdOf(*e.CostMicroUSD)
+			eventViews[i].CostUSD = &cost
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": dayViews, "recent": eventViews})
+	settings, err := d.Store.WorkspaceSettings(r.Context(), workspaceID)
+	if err != nil {
+		d.serverErrorf(w, r, err, "read workspace settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days": dayViews, "recent": eventViews, "budget": d.workspaceBudget(r.Context(), workspaceID, settings.Budget),
+	})
 }
 
 // usageRange reads from and to as UTC dates and returns a range of at most

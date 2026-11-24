@@ -17,11 +17,14 @@ const (
 	OutcomeOK          Outcome = "ok"
 	OutcomeStreamError Outcome = "stream_error"
 	OutcomeClientGone  Outcome = "client_gone"
+	// OutcomeBudgetExceeded is a request a spent blocking budget refused.
+	OutcomeBudgetExceeded Outcome = "budget_exceeded"
 )
 
 // notErrors are the outcomes the rollup leaves out of its error count. A
-// client that hung up is not the service failing.
-var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone)}
+// client that hung up is not the service failing, nor is a budget the
+// workspace set doing what it was set to do.
+var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone), string(OutcomeBudgetExceeded)}
 
 // HandoffAction is what context handoff did to a request. Empty is nothing.
 type HandoffAction string
@@ -60,7 +63,10 @@ type UsageEvent struct {
 	TTFTMs         int
 	Cached         bool
 	ContextHandoff HandoffAction
-	CreatedAt      time.Time
+	// CostMicroUSD is what the request cost in micro-USD, nil when it could
+	// not be priced.
+	CostMicroUSD *int64
+	CreatedAt    time.Time
 }
 
 // UsageDay is one day's totals for a route, vendor and model.
@@ -76,6 +82,9 @@ type UsageDay struct {
 	LatencyMsSum     int64
 	// CacheHits is how many of Requests the exact cache answered.
 	CacheHits int64
+	// CostMicroUSD sums the priced requests; Unpriced counts the others.
+	CostMicroUSD int64
+	Unpriced     int64
 }
 
 // WriteBatch stores events and adds them to the daily rollup in one
@@ -94,6 +103,7 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		prompt, completion, latency, tt = make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
 		cached                          = make([]bool, n)
 		handoff                         = make([]*string, n)
+		cost                            = make([]*int64, n)
 		created                         = make([]time.Time, n)
 	)
 	for i, e := range events {
@@ -102,7 +112,7 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		status[i], attempts[i] = int32(e.Status), int32(e.Attempts)
 		prompt[i], completion[i] = int64(e.PromptTokens), int64(e.CompletionTokens)
 		latency[i], tt[i] = int64(e.LatencyMs), int64(e.TTFTMs)
-		cached[i], created[i] = e.Cached, e.CreatedAt
+		cached[i], created[i], cost[i] = e.Cached, e.CreatedAt, e.CostMicroUSD
 		if e.ContextHandoff != "" {
 			h := string(e.ContextHandoff)
 			handoff[i] = &h
@@ -117,21 +127,22 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		`WITH stored AS (
 		     INSERT INTO usage_events (id, workspace_id, key_id, route_alias, vendor, model, status, outcome,
 		                               attempts, prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at,
-		                               context_handoff)
+		                               context_handoff, cost_micro_usd)
 		     SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::int[],
 		                          $8::text[], $9::int[], $10::bigint[], $11::bigint[], $12::bigint[], $13::bigint[],
-		                          $14::boolean[], $15::timestamptz[], $17::text[])
+		                          $14::boolean[], $15::timestamptz[], $17::text[], $18::bigint[])
 		     ON CONFLICT (id) DO NOTHING
 		     RETURNING workspace_id, created_at, route_alias, vendor, model, outcome,
-		               prompt_tokens, completion_tokens, latency_ms, cached
+		               prompt_tokens, completion_tokens, latency_ms, cached, cost_micro_usd
 		 )
 		 INSERT INTO usage_daily (workspace_id, day, route_alias, vendor, model,
 		                          requests, errors, prompt_tokens, completion_tokens, latency_ms_sum,
-		                          cache_hits)
+		                          cache_hits, cost_micro_usd, unpriced)
 		 SELECT workspace_id, (created_at AT TIME ZONE 'UTC')::date, route_alias, vendor, model,
 		        count(*), count(*) FILTER (WHERE outcome <> ALL($16::text[])),
 		        sum(prompt_tokens), sum(completion_tokens), sum(latency_ms),
-		        count(*) FILTER (WHERE cached)
+		        count(*) FILTER (WHERE cached),
+		        coalesce(sum(cost_micro_usd), 0), count(*) FILTER (WHERE cost_micro_usd IS NULL)
 		   FROM stored
 		  GROUP BY 1, 2, 3, 4, 5
 		  ORDER BY 1, 2, 3, 4, 5
@@ -141,9 +152,11 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		     prompt_tokens     = usage_daily.prompt_tokens + EXCLUDED.prompt_tokens,
 		     completion_tokens = usage_daily.completion_tokens + EXCLUDED.completion_tokens,
 		     latency_ms_sum    = usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum,
-		     cache_hits        = usage_daily.cache_hits + EXCLUDED.cache_hits`,
+		     cache_hits        = usage_daily.cache_hits + EXCLUDED.cache_hits,
+		     cost_micro_usd    = usage_daily.cost_micro_usd + EXCLUDED.cost_micro_usd,
+		     unpriced          = usage_daily.unpriced + EXCLUDED.unpriced`,
 		ids, ws, keys, route, vendor, model, status, outcome, attempts, prompt, completion, latency, tt,
-		cached, created, notErrors, handoff); err != nil {
+		cached, created, notErrors, handoff, cost); err != nil {
 		return fmt.Errorf("write usage batch: %w", err)
 	}
 	return nil
@@ -158,7 +171,7 @@ func (s *Store) Daily(ctx context.Context, workspaceID string, from, to time.Tim
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT day, route_alias, vendor, model, requests, errors, prompt_tokens, completion_tokens, latency_ms_sum,
-		        cache_hits
+		        cache_hits, cost_micro_usd, unpriced
 		   FROM usage_daily
 		  WHERE workspace_id = $1 AND day BETWEEN $2::date AND $3::date
 		    AND ($4 = '' OR route_alias = $4)
@@ -170,7 +183,7 @@ func (s *Store) Daily(ctx context.Context, workspaceID string, from, to time.Tim
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (UsageDay, error) {
 		var d UsageDay
 		err := row.Scan(&d.Day, &d.RouteAlias, &d.Vendor, &d.Model, &d.Requests, &d.Errors,
-			&d.PromptTokens, &d.CompletionTokens, &d.LatencyMsSum, &d.CacheHits)
+			&d.PromptTokens, &d.CompletionTokens, &d.LatencyMsSum, &d.CacheHits, &d.CostMicroUSD, &d.Unpriced)
 		return d, err
 	})
 }
@@ -184,7 +197,7 @@ func (s *Store) Recent(ctx context.Context, workspaceID string, limit int) ([]Us
 	rows, err := s.pool.Query(ctx,
 		`SELECT workspace_id, key_id, route_alias, vendor, model, status, outcome, attempts,
 		        prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at,
-		        coalesce(context_handoff, '')
+		        coalesce(context_handoff, ''), cost_micro_usd
 		   FROM usage_events
 		  WHERE workspace_id = $1
 		  ORDER BY created_at DESC, id DESC
@@ -195,7 +208,7 @@ func (s *Store) Recent(ctx context.Context, workspaceID string, limit int) ([]Us
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (UsageEvent, error) {
 		var e UsageEvent
 		err := row.Scan(&e.WorkspaceID, &e.KeyID, &e.RouteAlias, &e.Vendor, &e.Model, &e.Status, &e.Outcome,
-			&e.Attempts, &e.PromptTokens, &e.CompletionTokens, &e.LatencyMs, &e.TTFTMs, &e.Cached, &e.CreatedAt, &e.ContextHandoff)
+			&e.Attempts, &e.PromptTokens, &e.CompletionTokens, &e.LatencyMs, &e.TTFTMs, &e.Cached, &e.CreatedAt, &e.ContextHandoff, &e.CostMicroUSD)
 		return e, err
 	})
 }

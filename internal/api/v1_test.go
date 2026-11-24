@@ -126,7 +126,7 @@ func TestV1RefusesAKeyWhoseOwnerIsUnverified(t *testing.T) {
 	env := newTestEnv(t)
 	c := env.newClient()
 	env.signup(c, "carol@example.com")
-	key, _, err := env.deps.GatewayKeys.Mint(t.Context(), env.workspaceOf("carol@example.com"), "app")
+	key, _, err := env.deps.GatewayKeys.Mint(t.Context(), env.workspaceOf("carol@example.com"), "app", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

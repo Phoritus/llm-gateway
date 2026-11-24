@@ -22,6 +22,7 @@ import (
 
 	"llm-gateway/internal/api"
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/budget"
 	"llm-gateway/internal/cache"
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
@@ -55,8 +56,8 @@ const (
 	// retentionInterval is how often old raw usage events are pruned. Nothing
 	// depends on the exact cadence, so it is not configuration.
 	retentionInterval = time.Hour
-	// catalogInterval is how often the free quota catalog is read again, which
-	// is how long a corrected row takes to apply.
+	// catalogInterval is how often the free quota catalog and the model prices
+	// are read again, which is how long a corrected row takes to apply.
 	catalogInterval = 10 * time.Minute
 	keyCheckEvery   = 24 * time.Hour
 	keyCheckTick    = time.Minute
@@ -266,6 +267,7 @@ func run(logger *slog.Logger) error {
 	limiter := ratelimit.New(rdb)
 
 	credentials := store.NewCredentials(st, keyring)
+	ledger := budget.NewLedger(rdb, mailer, st, logger)
 	deps := api.Deps{
 		Config:      cfg,
 		Store:       st,
@@ -275,6 +277,7 @@ func run(logger *slog.Logger) error {
 		Auth:        authSvc,
 		Limiter:     limiter,
 		Mailer:      mailer,
+		Budgets:     ledger,
 		Logger:      logger,
 	}
 
@@ -320,6 +323,14 @@ func run(logger *slog.Logger) error {
 			slog.String("error", err.Error()))
 	}
 
+	// Without prices every answer is unpriced and costs nothing, so budgets
+	// count nothing until the refresh job reads them.
+	prices := &budget.Prices{}
+	if err := prices.Load(ctx, st); err != nil {
+		logger.Warn("model prices not loaded: answers count as unpriced until they are",
+			slog.String("error", err.Error()))
+	}
+
 	// Assigned only when the cache is on: a nil *cache.Exact inside the
 	// interface would not compare equal to nil in the handler.
 	var responseCache gateway.ResponseCache
@@ -356,6 +367,7 @@ func run(logger *slog.Logger) error {
 		Semantic:       semanticCache,
 		Embeddings:     embeddings,
 		Quota:          quota.New(catalog, v1Limiter, logger),
+		Budget:         &budget.Budgets{Ledger: ledger, Pricer: budget.Pricer{Prices: prices, Free: catalog}},
 		ContextHandoff: cfg.ContextHandoff,
 		Limiter:        v1Limiter,
 		Limits: gateway.Limits{
@@ -402,6 +414,7 @@ func run(logger *slog.Logger) error {
 	go usage.RunRetention(sweeperCtx, st, cfg.UsageRetention, retentionInterval, logger)
 	go promptlog.RunRetention(sweeperCtx, st, retentionInterval, logger)
 	go catalog.Run(sweeperCtx, st, catalogInterval, logger)
+	go prices.Run(sweeperCtx, st, catalogInterval, logger)
 	keyChecker := &keycheck.Checker{Store: credentials, Providers: providers,
 		Interval: keyCheckEvery, PerTick: keyCheckBatch, Logger: logger}
 	go keyChecker.Run(sweeperCtx, keyCheckTick)
@@ -471,7 +484,7 @@ func flushQueues(by time.Time, queues ...interface{ Close(context.Context) }) {
 const semanticEmbedTimeout = 2 * time.Second
 
 func newVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*redis.Client, error) {
-	opts, err := redis.ParseURL(url)
+	opts, err := store.RedisOptions(url)
 	if err != nil {
 		return nil, fmt.Errorf("parse VECTOR_REDIS_URL: %w", err)
 	}

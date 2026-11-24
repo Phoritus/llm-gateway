@@ -25,7 +25,7 @@
           "datasourceUid": "__PROM_UID__",
           "model": {
             "refId": "A",
-            "expr": "(sum(rate(gateway_requests_total{outcome=~\"upstream_error|timeout|unavailable|stream_error\"}[5m])) / sum(rate(gateway_requests_total{outcome!=\"refused\"}[5m]))) and on() sum(rate(gateway_requests_total[5m])) > 0.05",
+            "expr": "(sum(rate(gateway_requests_total{outcome=~\"upstream_error|timeout|unavailable|stream_error\"}[5m])) / sum(rate(gateway_requests_total{outcome!~\"refused|budget_exceeded\"}[5m]))) and on() sum(rate(gateway_requests_total[5m])) > 0.05",
             "instant": true
           }
         },

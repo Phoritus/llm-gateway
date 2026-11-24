@@ -24,6 +24,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/budget"
 	"llm-gateway/internal/cache"
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
@@ -149,6 +150,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	// process of draining — which showed up there as one request allowed past
 	// the burst, in a package this fixture does not touch.
 	deleteKeys(t, rdb, "rl:*")
+	deleteKeys(t, rdb, "spend:*")
+	deleteKeys(t, rdb, "budgetmail:*")
 
 	mailer := &captureMailer{}
 	cfg := &config.Config{
@@ -199,6 +202,12 @@ func newTestEnv(t *testing.T) *testEnv {
 		// test output unless something needs debugging.
 		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
+	ledger := budget.NewLedger(rdb, mailer, st, deps.Logger)
+	deps.Budgets = ledger
+	var prices budget.Prices
+	if err := prices.Load(ctx, mockPrice{}); err != nil {
+		t.Fatal(err)
+	}
 
 	// The real recorder over the real store, so a /v1 request in a test shows
 	// up in /api/usage the way it does in production.
@@ -236,6 +245,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		// Its keys carry the workspace's id, which is new in every test, so
 		// nothing has to be deleted between them.
 		Cache:   cache.NewExact(rdb, time.Minute),
+		Budget:  &budget.Budgets{Ledger: ledger, Pricer: budget.Pricer{Prices: &prices}},
 		Limiter: ratelimit.NewFailOpen(deps.Limiter, ratelimit.NewLocal(), deps.Logger),
 		Limits: gateway.Limits{
 			KeyRequests:          ratelimit.PerMinute(120),
@@ -255,6 +265,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	cfg.PublicBaseURL = server.URL
 
 	return &testEnv{t: t, server: server, store: st, mailer: mailer, deps: deps}
+}
+
+// mockPrice prices the mock's echo model at a dollar a token, so one request
+// spends a small budget.
+type mockPrice struct{}
+
+func (mockPrice) ModelPrices(context.Context) ([]store.ModelPrice, error) {
+	return []store.ModelPrice{{Vendor: "mock", Model: "echo", Input: 1e12, Output: 1e12}}, nil
 }
 
 func truncateAll(t *testing.T, st *store.Store) {

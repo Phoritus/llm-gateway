@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"llm-gateway/internal/budget"
 	"llm-gateway/internal/cache"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
@@ -47,7 +48,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		key  store.ActiveGatewayKey
 		cost spent
 	)
-	defer func() { d.finish(&obs, key, &cost) }()
+	defer func() { d.finish(r.Context(), &obs, key, &cost) }()
 
 	rc := http.NewResponseController(w)
 	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
@@ -106,6 +107,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	obs.routed, obs.alias = true, req.Model
+	obs.budgets, obs.estimate = budgetAccounts(key, route), estimate
 	if route.Settings.PromptLogging {
 		obs.prompt = body
 	}
@@ -117,6 +119,21 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		charged = &cost
 	)
 	cached := d.lookupCache(r, key.WorkspaceID, route, req)
+	if cached.hit == nil {
+		if cached.key != "" {
+			w.Header().Set("X-Cache", "MISS")
+		}
+		targets, ok := d.budgetTargets(w, r, obs.budgets, route.Targets)
+		if !ok {
+			if cached.missed {
+				countCache(cacheMiss)
+			}
+			obs.status, obs.outcome = http.StatusTooManyRequests, store.OutcomeBudgetExceeded
+			return
+		}
+		route.Targets = targets
+		d.lookupSemantic(ctx, key.WorkspaceID, route, req, &cached)
+	}
 	if cached.hit != nil {
 		// The stored answer is sent as a stream, by the code that sends a live
 		// one. The usage it carries was spent by the request that stored it,
@@ -128,10 +145,10 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		obs.target = store.ResolvedTarget{Vendor: cached.hit.Vendor, Model: cached.hit.Model}
 		w.Header().Set("X-Cache", "HIT")
 		setFallbackHeaders(w.Header(), router.Result{})
-	} else {
-		if cached.key != "" {
-			w.Header().Set("X-Cache", "MISS")
+		if d.Budget != nil && anyBudget(obs.budgets) {
+			w.Header().Set(headerCostBasis, string(budget.Cached))
 		}
+	} else {
 		if route.FreeFirst && d.Quota != nil {
 			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
 		}
@@ -153,6 +170,9 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stream, first, obs.target = res.Stream, res.First, res.Target
+		if d.Budget != nil && anyBudget(obs.budgets) {
+			w.Header().Set(headerCostBasis, string(d.Budget.Charge(res.Target, 0, 0).Basis))
+		}
 		defer func() { d.spendFree(ctx, res.Target, &cost, estimate) }()
 	}
 	defer stream.Close()

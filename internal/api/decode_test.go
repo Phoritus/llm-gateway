@@ -189,3 +189,20 @@ func TestUnknownFieldsFailsClosedForANonStructTarget(t *testing.T) {
 		t.Errorf("unknownFields(nil) = %v, want every key reported", got)
 	}
 }
+
+// An embedded struct's fields are known, as encoding/json decodes them, even
+// when its type is unexported; its own unexported fields are not.
+func TestUnknownFieldsKnowsAnEmbeddedStructsFields(t *testing.T) {
+	type inner struct {
+		Amount int `json:"amount"`
+		hidden int
+	}
+	var dst struct {
+		Name string `json:"name"`
+		inner
+	}
+	fields := map[string]json.RawMessage{"name": nil, "amount": nil, "hidden": nil}
+	if got := unknownFields(&dst, fields); len(got) != 1 || got[0] != "hidden" {
+		t.Errorf("unknownFields = %v, want only hidden", got)
+	}
+}

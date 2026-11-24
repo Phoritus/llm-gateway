@@ -76,6 +76,12 @@ func (c *Catalog) Run(ctx context.Context, src Source, every time.Duration, logg
 	}
 }
 
+// Lists reports whether the model has a free tier in the catalog.
+func (c *Catalog) Lists(v provider.Vendor, model string) bool {
+	_, ok := c.limits(store.ResolvedTarget{Vendor: v, Model: model})
+	return ok
+}
+
 func (c *Catalog) limits(t store.ResolvedTarget) (Limits, bool) {
 	entries := c.entries.Load()
 	if entries == nil {
