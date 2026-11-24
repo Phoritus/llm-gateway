@@ -125,7 +125,7 @@ func TestGatewayKeyLimitCountsOnlyActiveKeys(t *testing.T) {
 
 	var firstID string
 	for i := range 50 {
-		_, key, err := env.deps.GatewayKeys.Mint(t.Context(), ws, "")
+		_, key, err := env.deps.GatewayKeys.Mint(t.Context(), ws, "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

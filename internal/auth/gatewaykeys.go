@@ -51,8 +51,9 @@ func NewGatewayKeys(st *store.Store) *GatewayKeys {
 	}
 }
 
-// Mint creates a key and returns it in full.
-func (g *GatewayKeys) Mint(ctx context.Context, workspaceID, name string) (string, *store.GatewayKey, error) {
+// Mint creates a key, with a monthly budget or nil for none, and returns it
+// in full.
+func (g *GatewayKeys) Mint(ctx context.Context, workspaceID, name string, budget *store.Budget) (string, *store.GatewayKey, error) {
 	secret, _, err := newSecret()
 	if err != nil {
 		return "", nil, err
@@ -62,6 +63,7 @@ func (g *GatewayKeys) Mint(ctx context.Context, workspaceID, name string) (strin
 		Name:   name,
 		Prefix: token[:gatewayKeyShownLen],
 		Hash:   hashSecret(token),
+		Budget: budget,
 	})
 	if err != nil {
 		return "", nil, err
