@@ -379,3 +379,39 @@ func TestAToolCallFinishesWithToolCalls(t *testing.T) {
 		t.Errorf("text choice finish_reason = %q, want stop", got)
 	}
 }
+
+func TestACustomEndpointCallsTheCredentialsBaseURL(t *testing.T) {
+	var path string
+	srv := upstream(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		w.Write([]byte(`{"data":[]}`))
+	})
+	p := NewCustom(Options{})
+	p.client = srv.Client()
+	if err := p.CheckKey(context.Background(), provider.Credential{APIKey: testKey, BaseURL: srv.URL + "/llm/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/llm/v1/models" {
+		t.Errorf("path = %q, want the credential's base URL", path)
+	}
+}
+
+func TestACustomEndpointIsCalledThroughTheEgressGuard(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("a custom endpoint on loopback was reached")
+	}))
+	defer srv.Close()
+	p := NewCustom(Options{})
+	err := p.CheckKey(context.Background(), provider.Credential{APIKey: testKey, BaseURL: srv.URL + "/v1/path-token-abc"})
+	if err == nil || !strings.Contains(err.Error(), "not on the public internet") {
+		t.Fatalf("err = %v, want the guard's refusal", err)
+	}
+	if strings.Contains(err.Error(), "path-token-abc") {
+		t.Errorf("the error carries the base URL: %v", err)
+	}
+	_, err = p.ChatStream(context.Background(), chatRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
+		provider.Credential{APIKey: testKey, BaseURL: "http://example.com/v1"})
+	if err == nil || !strings.Contains(err.Error(), "only https") {
+		t.Fatalf("err = %v, want plain http refused", err)
+	}
+}

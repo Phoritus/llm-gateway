@@ -646,3 +646,20 @@ func TestBreakerOpenedCountsAnOpeningOnce(t *testing.T) {
 		}
 	})
 }
+
+func TestACustomServersFailuresOpenOnlyItsOwnBreaker(t *testing.T) {
+	h := newHarness(t)
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		h.run(3, map[string]error{id: failure(provider.ErrUpstream, 0)}, target(id, provider.VendorCustom, "m1"))
+	}
+	if !h.attempted(target("z", provider.VendorCustom, "m1")) {
+		t.Fatal("five workspaces' broken servers opened the breaker for another's")
+	}
+
+	for _, model := range []string{"m1", "m2", "m3", "m4", "m5"} {
+		h.run(3, map[string]error{"broken": failure(provider.ErrUpstream, 0)}, target("broken", provider.VendorCustom, model))
+	}
+	if h.attempted(target("broken", provider.VendorCustom, "m6")) {
+		t.Error("five failures in a row did not open the breaker for the server that failed")
+	}
+}

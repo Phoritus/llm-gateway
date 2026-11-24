@@ -52,13 +52,14 @@ var (
 	credentialModel = subject{"skip:cm:", func(t store.ResolvedTarget) string {
 		return escape(t.CredentialID) + ":" + escape(t.Model)
 	}}
-	// vendor is the circuit breaker's subject, the only one that spans
-	// workspaces.
-	vendor = subject{"cb:", func(t store.ResolvedTarget) string {
+	breaker = subject{"cb:", func(t store.ResolvedTarget) string {
+		if t.Vendor == provider.VendorCustom {
+			return escape(string(t.Vendor)) + ":" + escape(t.CredentialID)
+		}
 		return escape(string(t.Vendor))
 	}}
 
-	subjects = []subject{credential, credentialModel, vendor}
+	subjects = []subject{credential, credentialModel, breaker}
 )
 
 func (s subject) key(t store.ResolvedTarget) string { return s.prefix + s.id(t) }
@@ -117,7 +118,7 @@ const breakerCounter = "cbn:"
 // transient is what a 5xx or a timeout places: the vendor's breaker, and a
 // bench for the one credential and model that keeps failing.
 var transient = []effect{
-	{subject: vendor, ttl: fixed(30 * time.Second), counter: breakerCounter, window: time.Minute, threshold: 5},
+	{subject: breaker, ttl: fixed(30 * time.Second), counter: breakerCounter, window: time.Minute, threshold: 5},
 	{subject: credentialModel, ttl: fixed(10 * time.Minute), counter: "bench:", window: 15 * time.Minute, threshold: 3},
 }
 

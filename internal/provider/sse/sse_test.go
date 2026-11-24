@@ -70,3 +70,11 @@ func TestReaderPassesOnReadErrors(t *testing.T) {
 		t.Fatalf("err = %v, want the read error", err)
 	}
 }
+
+func TestAnEventThatNeverEndsIsRefusedAtMaxEvent(t *testing.T) {
+	line := "data: " + strings.Repeat("x", MaxLine/2) + "\n"
+	r := NewReader(strings.NewReader(strings.Repeat(line, 2*MaxEvent/MaxLine+2)))
+	if _, err := r.Next(); !errors.Is(err, ErrEventTooLong) {
+		t.Fatalf("err = %v, want ErrEventTooLong", err)
+	}
+}

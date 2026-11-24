@@ -34,7 +34,8 @@ type Stream interface {
 // call, not bound at construction, because one adapter and its connection pool
 // serve every workspace's keys.
 type Credential struct {
-	APIKey string
+	APIKey  string
+	BaseURL string
 }
 
 // ChatRequest is the OpenAI chat completions request. The polymorphic parts --

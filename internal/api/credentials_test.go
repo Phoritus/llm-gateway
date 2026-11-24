@@ -69,6 +69,17 @@ func TestCredentialValidation(t *testing.T) {
 		{"long name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": strings.Repeat("n", 101)}},
 		{"NUL in name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": "a\u0000b"}},
 		{"newline in name", "name", map[string]any{"provider": "groq", "secret": apiTestSecret, "name": "a\nb"}},
+		{"custom without a base URL", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret}},
+		{"base URL on another provider", "base_url", map[string]any{"provider": "groq", "secret": apiTestSecret, "base_url": "https://llm.example.com/v1"}},
+		{"plain http base URL", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "http://llm.example.com/v1"}},
+		{"base URL with a user", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://u:p@llm.example.com/v1"}},
+		{"base URL with a query", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://llm.example.com/v1?x=1"}},
+		{"base URL on loopback", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://127.0.0.1/v1"}},
+		{"base URL at the metadata address", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://169.254.169.254/v1"}},
+		{"base URL on a private IPv6 address", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://[fd00::1]/v1"}},
+		{"base URL on localhost", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://localhost:8080/v1"}},
+		{"base URL on localhost with a trailing dot", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://localhost./v1"}},
+		{"base URL with only a port", "base_url", map[string]any{"provider": "custom", "secret": apiTestSecret, "base_url": "https://:443/v1"}},
 	} {
 		res := createCredential(alice, tc.body)
 		errObj, _ := res.body["error"].(map[string]any)
@@ -78,6 +89,20 @@ func TestCredentialValidation(t *testing.T) {
 		if s, _ := tc.body["secret"].(string); s != "" && strings.Contains(res.raw, s) {
 			t.Errorf("%s: response echoes the secret: %s", tc.name, res.raw)
 		}
+	}
+}
+
+func TestACustomCredentialKeepsItsBaseURL(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+	res := createCredential(alice, map[string]any{"provider": "custom", "secret": apiTestSecret,
+		"base_url": "https://LLM.example.com/v1/"})
+	if res.status != http.StatusCreated || res.body["base_url"] != "https://llm.example.com/v1" {
+		t.Fatalf("create: %d %s", res.status, res.raw)
+	}
+	other := createCredential(alice, map[string]any{"provider": "groq", "secret": apiTestSecret})
+	if other.status != http.StatusCreated || other.body["base_url"] != nil {
+		t.Fatalf("groq credential: %d %s", other.status, other.raw)
 	}
 }
 

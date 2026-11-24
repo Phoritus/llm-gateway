@@ -10,6 +10,10 @@ const maxChoices = 128
 
 const maxToolCalls = 128
 
+// MaxAnswerBytes bounds the text and tool call arguments an Assembler holds.
+// A real answer is far below it; an upstream that never stops is not.
+const MaxAnswerBytes = 8 << 20
+
 // Assembler builds a ChatResponse from a stream's chunks as they pass. It is
 // fed chunk by chunk rather than handed a Stream so that the same chunks can
 // go to a client at the same time: a non-streaming request assembles them
@@ -18,6 +22,7 @@ const maxToolCalls = 128
 type Assembler struct {
 	resp    ChatResponse
 	choices []*choiceParts
+	size    int
 }
 
 type choiceParts struct {
@@ -29,6 +34,9 @@ type callParts struct {
 	call      ToolCall
 	arguments strings.Builder
 }
+
+// TooLarge reports that the chunks added hold more than MaxAnswerBytes.
+func (a *Assembler) TooLarge() bool { return a.size > MaxAnswerBytes }
 
 func (a *Assembler) Add(c *ChatChunk) {
 	if a.resp.ID == "" {
@@ -56,6 +64,7 @@ func (a *Assembler) Add(c *ChatChunk) {
 		if ch.Delta.Role != "" {
 			item.Message.Role = ch.Delta.Role
 		}
+		a.size += len(ch.Delta.Content) + len(ch.Delta.ToolCalls)
 		parts.content.WriteString(ch.Delta.Content)
 		parts.addToolCalls(ch.Delta.ToolCalls)
 		if ch.FinishReason != nil {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -13,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/egress"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -22,6 +25,7 @@ const (
 	maxName      = 100
 	minSecretLen = 20
 	maxSecretLen = 512
+	maxBaseURL   = 2048
 )
 
 type credentialView struct {
@@ -29,11 +33,16 @@ type credentialView struct {
 	Provider  string    `json:"provider"`
 	Name      string    `json:"name"`
 	Last4     string    `json:"last4"`
+	BaseURL   *string   `json:"base_url"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 func viewOf(c store.Credential) credentialView {
-	return credentialView{ID: c.ID, Provider: string(c.Provider), Name: c.Name, Last4: c.Last4, CreatedAt: c.CreatedAt}
+	v := credentialView{ID: c.ID, Provider: string(c.Provider), Name: c.Name, Last4: c.Last4, CreatedAt: c.CreatedAt}
+	if c.BaseURL != "" {
+		v.BaseURL = &c.BaseURL
+	}
+	return v
 }
 
 func (d Deps) handleListCredentials(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +63,7 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 		Name     string `json:"name"`
 		Secret   string `json:"secret"`
+		BaseURL  string `json:"base_url"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -67,6 +77,10 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	baseURL, ok := parseBaseURL(w, vendor, req.BaseURL)
+	if !ok {
+		return
+	}
 	secret := strings.TrimSpace(req.Secret)
 	if !validSecret(secret) {
 		invalidField(w, "secret", "secret must be 20 to 512 printable ASCII characters with no spaces.")
@@ -74,7 +88,7 @@ func (d Deps) handleCreateCredential(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cred, err := d.Credentials.Create(r.Context(), auth.WorkspaceID(r.Context()),
-		store.NewCredential{Provider: vendor, Name: name, Secret: secret})
+		store.NewCredential{Provider: vendor, Name: name, Secret: secret, BaseURL: baseURL})
 	switch {
 	case errors.Is(err, store.ErrLimitReached):
 		writeError(w, http.StatusConflict, typeInvalidRequest, "credential_limit_reached",
@@ -131,7 +145,7 @@ func (d Deps) handleTestCredential(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), keyTestTimeout)
 	defer cancel()
-	err = adapter.CheckKey(ctx, provider.Credential{APIKey: cred.Secret})
+	err = adapter.CheckKey(ctx, provider.Credential{APIKey: cred.Secret, BaseURL: cred.BaseURL})
 	if r.Context().Err() != nil {
 		return
 	}
@@ -173,6 +187,33 @@ func parseVendorField(w http.ResponseWriter, raw string, production bool) (provi
 	}
 	invalidField(w, "provider", "provider must be one of: "+strings.Join(names, ", ")+".")
 	return "", false
+}
+
+// A hostname is checked by egress on every dial, since what it resolves to
+// can change after this check.
+func parseBaseURL(w http.ResponseWriter, vendor provider.Vendor, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if vendor != provider.VendorCustom {
+		if raw != "" {
+			invalidField(w, "base_url", "base_url is only for the custom provider.")
+			return "", false
+		}
+		return "", true
+	}
+	u, err := url.Parse(raw)
+	if raw == "" || len(raw) > maxBaseURL || err != nil || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" ||
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsFunc(raw, unicode.IsSpace) {
+		invalidField(w, "base_url", "base_url must be an https URL with a host and no user, query or fragment, such as https://llm.example.com/v1.")
+		return "", false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	addr, err := netip.ParseAddr(host)
+	if (err == nil && egress.Check(addr) != nil) || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		invalidField(w, "base_url", "base_url must name a server on the public internet.")
+		return "", false
+	}
+	u.Host = strings.ToLower(u.Host)
+	return strings.TrimSuffix(u.String(), "/"), true
 }
 
 func parseNameField(w http.ResponseWriter, raw string) (string, bool) {

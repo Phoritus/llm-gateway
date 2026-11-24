@@ -193,6 +193,9 @@ func (s *assembled) Next() (*provider.ChatChunk, error) {
 	switch {
 	case err == nil:
 		s.answer.Add(chunk)
+		if s.answer.TooLarge() {
+			return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "answer longer than provider.MaxAnswerBytes"}
+		}
 	case errors.Is(err, io.EOF):
 		s.complete = true
 	}

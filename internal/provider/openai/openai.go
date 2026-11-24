@@ -10,10 +10,12 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"llm-gateway/internal/egress"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/sse"
 )
@@ -81,6 +83,20 @@ func New(ep Endpoint, opts Options) *Provider {
 	}
 }
 
+func (p *Provider) base(cred provider.Credential) string {
+	if p.endpoint.BaseURL != "" {
+		return p.endpoint.BaseURL
+	}
+	return cred.BaseURL
+}
+
+// NewCustom is the adapter for custom credentials: each call goes to the
+// credential's own base URL, a URL a user chose, through the egress guard.
+func NewCustom(opts Options) *Provider {
+	dial := orDefault(opts.DialTimeout, defaultDialTimeout)
+	return &Provider{endpoint: Endpoint{KeyCheckPath: "/models"}, client: egress.Client(egress.Transport(dial))}
+}
+
 func orDefault(d, fallback time.Duration) time.Duration {
 	if d > 0 {
 		return d
@@ -99,7 +115,7 @@ func (p *Provider) ChatStream(ctx context.Context, req *provider.ChatRequest, cr
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "encode request: " + err.Error()}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint.BaseURL+"/chat/completions", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.base(cred)+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
 	}
@@ -128,7 +144,7 @@ func (p *Provider) ChatStream(ctx context.Context, req *provider.ChatRequest, cr
 }
 
 func (p *Provider) CheckKey(ctx context.Context, cred provider.Credential) error {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint.BaseURL+p.endpoint.KeyCheckPath, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base(cred)+p.endpoint.KeyCheckPath, nil)
 	if err != nil {
 		return &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
 	}
@@ -148,11 +164,18 @@ func callError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// The detail leaves out the URL: a custom one is a user's, and its path
+	// may carry a token.
+	detail := err.Error()
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		detail = urlErr.Op + ": " + urlErr.Err.Error()
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return &provider.Error{Kind: provider.ErrTimeout, Detail: err.Error()}
+		return &provider.Error{Kind: provider.ErrTimeout, Detail: detail}
 	}
-	return &provider.Error{Kind: provider.ErrUpstream, Detail: err.Error()}
+	return &provider.Error{Kind: provider.ErrUpstream, Detail: detail}
 }
 
 type stream struct {
@@ -411,7 +434,7 @@ func (p *Provider) Embed(ctx context.Context, req *provider.EmbedRequest, cred p
 	if err != nil {
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "encode request: " + err.Error()}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint.BaseURL+"/embeddings", bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.base(cred)+"/embeddings", bytes.NewReader(payload))
 	if err != nil {
 		return nil, &provider.Error{Kind: provider.ErrUpstream, Detail: "build request: " + err.Error()}
 	}

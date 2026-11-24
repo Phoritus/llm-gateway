@@ -12,11 +12,12 @@ const (
 	VendorGemini     Vendor = "gemini"
 	VendorAnthropic  Vendor = "anthropic"
 	VendorMock       Vendor = "mock"
+	VendorCustom     Vendor = "custom"
 )
 
 var vendors = []Vendor{
 	VendorOpenAI, VendorGroq, VendorCerebras, VendorOpenRouter,
-	VendorMistral, VendorGemini, VendorAnthropic, VendorMock,
+	VendorMistral, VendorGemini, VendorAnthropic, VendorMock, VendorCustom,
 }
 
 // Vendors returns every Vendor in a stable order. The caller owns the slice.

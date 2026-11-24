@@ -111,3 +111,18 @@ func TestChatRequestKeepsFieldsItDoesNotModel(t *testing.T) {
 		t.Errorf("an extra overrode a modelled field: %s", out)
 	}
 }
+
+func TestAnAssemblerSaysWhenItHoldsTooMuch(t *testing.T) {
+	var a Assembler
+	chunk := &ChatChunk{Choices: []ChunkChoice{{Delta: Delta{Content: strings.Repeat("x", 1<<20)}}}}
+	for range MaxAnswerBytes >> 20 {
+		a.Add(chunk)
+	}
+	if a.TooLarge() {
+		t.Fatal("too large at exactly MaxAnswerBytes")
+	}
+	a.Add(chunk)
+	if !a.TooLarge() {
+		t.Fatal("not too large past MaxAnswerBytes")
+	}
+}

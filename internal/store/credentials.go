@@ -32,6 +32,7 @@ type Credential struct {
 	Provider    provider.Vendor
 	Name        string
 	Last4       string
+	BaseURL     string
 	CreatedAt   time.Time
 }
 
@@ -39,12 +40,31 @@ type NewCredential struct {
 	Provider provider.Vendor
 	Name     string
 	Secret   string
+	BaseURL  string
 }
 
-func credentialAAD(workspaceID, id uuid.UUID, vendor provider.Vendor) []byte {
+func credentialAAD(workspaceID, id uuid.UUID, vendor provider.Vendor, baseURL string) []byte {
+	if vendor == provider.VendorCustom {
+		return customCredentialAAD(workspaceID, id, baseURL)
+	}
+	return vendorCredentialAAD(workspaceID, id, vendor)
+}
+
+func vendorCredentialAAD(workspaceID, id uuid.UUID, vendor provider.Vendor) []byte {
 	aad := append([]byte("llm-gateway/provider-credential v1\x00"), workspaceID[:]...)
 	aad = append(aad, id[:]...)
 	return append(aad, vendor...)
+}
+
+func customCredentialAAD(workspaceID, id uuid.UUID, baseURL string) []byte {
+	return append(append(vendorCredentialAAD(workspaceID, id, provider.VendorCustom), 0), baseURL...)
+}
+
+func nullable(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func last4(secret string) string {
@@ -63,7 +83,7 @@ func (c *Credentials) Create(ctx context.Context, workspaceID string, in NewCred
 		return nil, fmt.Errorf("workspace id: %w", err)
 	}
 	id := uuid.New()
-	sealed := c.keys.Seal([]byte(in.Secret), credentialAAD(ws, id, in.Provider))
+	sealed := c.keys.Seal([]byte(in.Secret), credentialAAD(ws, id, in.Provider, in.BaseURL))
 	suffix := last4(in.Secret)
 
 	tx, err := c.store.pool.Begin(ctx)
@@ -78,13 +98,13 @@ func (c *Credentials) Create(ctx context.Context, workspaceID string, in NewCred
 
 	var out Credential
 	err = tx.QueryRow(ctx,
-		`INSERT INTO provider_credentials (id, workspace_id, provider, name, key_id, ciphertext, last4)
-		 SELECT $1, $2, $3, $4, $5, $6, $7
+		`INSERT INTO provider_credentials (id, workspace_id, provider, name, key_id, ciphertext, last4, base_url)
+		 SELECT $1, $2, $3, $4, $5, $6, $7, $9
 		  WHERE (SELECT count(*) FROM provider_credentials WHERE workspace_id = $2) < $8
-		 RETURNING id, workspace_id, provider, name, last4, created_at`,
+		 RETURNING id, workspace_id, provider, name, last4, coalesce(base_url, ''), created_at`,
 		id.String(), workspaceID, string(in.Provider), in.Name, string(sealed.KeyID), sealed.Ciphertext, suffix,
-		maxCredentialsPerWorkspace,
-	).Scan(&out.ID, &out.WorkspaceID, &out.Provider, &out.Name, &out.Last4, &out.CreatedAt)
+		maxCredentialsPerWorkspace, nullable(in.BaseURL),
+	).Scan(&out.ID, &out.WorkspaceID, &out.Provider, &out.Name, &out.Last4, &out.BaseURL, &out.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLimitReached
 	}
@@ -100,7 +120,7 @@ func (c *Credentials) Create(ctx context.Context, workspaceID string, in NewCred
 // List returns the workspace's credentials, newest first.
 func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credential, error) {
 	rows, err := c.store.pool.Query(ctx,
-		`SELECT id, workspace_id, provider, name, last4, created_at
+		`SELECT id, workspace_id, provider, name, last4, coalesce(base_url, ''), created_at
 		   FROM provider_credentials
 		  WHERE workspace_id = $1
 		  ORDER BY created_at DESC, id`, workspaceID)
@@ -112,7 +132,7 @@ func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credentia
 	var out []Credential
 	for rows.Next() {
 		var cred Credential
-		if err := rows.Scan(&cred.ID, &cred.WorkspaceID, &cred.Provider, &cred.Name, &cred.Last4, &cred.CreatedAt); err != nil {
+		if err := rows.Scan(&cred.ID, &cred.WorkspaceID, &cred.Provider, &cred.Name, &cred.Last4, &cred.BaseURL, &cred.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan provider credential: %w", err)
 		}
 		out = append(out, cred)
@@ -158,8 +178,9 @@ func (c *Credentials) Delete(ctx context.Context, workspaceID, id string) error 
 }
 
 type UnsealedCredential struct {
-	Vendor provider.Vendor
-	Secret string
+	Vendor  provider.Vendor
+	Secret  string
+	BaseURL string
 }
 
 // Unseal opens a credential's key. The error never carries the plaintext.
@@ -174,9 +195,9 @@ func (c *Credentials) Unseal(ctx context.Context, workspaceID, id string) (Unsea
 	}
 	var sealed sealedCredential
 	err = c.store.pool.QueryRow(ctx,
-		`SELECT id, provider, key_id, ciphertext FROM provider_credentials
+		`SELECT id, provider, coalesce(base_url, ''), key_id, ciphertext FROM provider_credentials
 		  WHERE workspace_id = $1 AND id = $2`, workspaceID, rowID).
-		Scan(&sealed.id, &sealed.vendor, &sealed.keyID, &sealed.blob)
+		Scan(&sealed.id, &sealed.vendor, &sealed.baseURL, &sealed.keyID, &sealed.blob)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UnsealedCredential{}, ErrNotFound
 	}
@@ -187,7 +208,7 @@ func (c *Credentials) Unseal(ctx context.Context, workspaceID, id string) (Unsea
 	if err != nil {
 		return UnsealedCredential{}, err
 	}
-	return UnsealedCredential{Vendor: sealed.vendor, Secret: secret}, nil
+	return UnsealedCredential{Vendor: sealed.vendor, Secret: secret, BaseURL: sealed.baseURL}, nil
 }
 
 // ResolvedRoute is a route as /v1 calls it: its chain in order, each target
@@ -211,6 +232,7 @@ type ResolvedTarget struct {
 	Vendor       provider.Vendor
 	Model        string
 	Secret       string
+	BaseURL      string
 	// FirstByteTimeout is how long the target may take to its first chunk.
 	// Zero is router.DefaultFirstByteTimeout.
 	FirstByteTimeout time.Duration
@@ -224,7 +246,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 		return nil, ErrNotFound
 	}
 	rows, err := c.store.pool.Query(ctx,
-		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.context_handoff, r.updated_at, w.settings, c.id, c.provider, t.model, t.first_byte_timeout_seconds, c.key_id, c.ciphertext
+		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.context_handoff, r.updated_at, w.settings, c.id, c.provider, coalesce(c.base_url, ''), t.model, t.first_byte_timeout_seconds, c.key_id, c.ciphertext
 		   FROM routes r
 		   JOIN workspaces w ON w.id = r.workspace_id
 		   JOIN route_targets t ON t.route_id = r.id AND t.workspace_id = r.workspace_id
@@ -245,7 +267,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 			updated time.Time
 			raw     []byte
 		)
-		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &route.ContextHandoff, &updated, &raw, &sealed.id, &sealed.vendor, &model, &wait, &sealed.keyID, &sealed.blob); err != nil {
+		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &route.ContextHandoff, &updated, &raw, &sealed.id, &sealed.vendor, &sealed.baseURL, &model, &wait, &sealed.keyID, &sealed.blob); err != nil {
 			return nil, fmt.Errorf("scan route target: %w", err)
 		}
 		route.Version = updated.UnixNano()
@@ -257,7 +279,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 			return nil, err
 		}
 		route.Targets = append(route.Targets, ResolvedTarget{
-			CredentialID: sealed.id.String(), Vendor: sealed.vendor, Model: model, Secret: secret,
+			CredentialID: sealed.id.String(), Vendor: sealed.vendor, BaseURL: sealed.baseURL, Model: model, Secret: secret,
 			FirstByteTimeout: seconds(wait),
 		})
 	}
@@ -271,15 +293,16 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 }
 
 type sealedCredential struct {
-	id     uuid.UUID
-	vendor provider.Vendor
-	keyID  string
-	blob   []byte
+	id      uuid.UUID
+	vendor  provider.Vendor
+	baseURL string
+	keyID   string
+	blob    []byte
 }
 
 func (c *Credentials) open(ws uuid.UUID, s sealedCredential) (string, error) {
 	plain, err := c.keys.Open(crypto.Sealed{KeyID: crypto.KeyID(s.keyID), Ciphertext: s.blob},
-		credentialAAD(ws, s.id, s.vendor))
+		credentialAAD(ws, s.id, s.vendor, s.baseURL))
 	if err != nil {
 		return "", fmt.Errorf("open provider credential %s: %w", s.id, err)
 	}
