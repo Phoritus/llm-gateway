@@ -76,7 +76,7 @@ Day to day:
 | `make loadtest` | Start a gateway on `LOAD_PORT` (18081) with the `/v1` limits raised, load `mock/echo` with vegeta at `LOAD_RATE` (100/s) for `LOAD_DURATION` (30s), streaming and not, and fail unless p50 is under 10ms and peak memory under 256 MB. Needs `deps-up` and `uv`, not `make run` |
 | `make env-secrets` | Fill in a missing or placeholder `MASTER_KEY`/`SESSION_SECRET` |
 | `make docker-build` | Build the container image |
-| `make ssh` / `make deploy` / `make vm-logs` | Open a shell on the deployed VM, pull `main` there and rebuild the stack in `deploy/`, or follow the gateway's logs. Reads `VM_HOST`, `VM_USER` and `VM_KEY` from `.env.dev` |
+| `make ssh` / `make deploy` / `make vm-logs` | Open a shell on the deployed VM, pull `main` there and run `deploy/roll.sh`, or follow both gateways' logs. `roll.sh` restarts the two gateways one at a time behind Caddy: on SIGTERM a gateway answers `/healthz` with 503 for 3s, so Caddy's 1s health check takes it out of rotation before it stops accepting, then it drains inside `SHUTDOWN_TIMEOUT`. Caddy is reloaded, never recreated by it. Rehearsed locally under load: no request dropped. Reads `VM_HOST`, `VM_USER` and `VM_KEY` from `.env.dev` |
 | `make cloudflare-ips` | Rewrite `deploy/trusted-proxies.env` from Cloudflare's published ranges. Commit it, then `make deploy` |
 
 `make` needs bash on `PATH`; on Windows run it from Git Bash. If `make` itself
@@ -289,7 +289,7 @@ Environment variables only — see `.env.example`. The service must refuse to st
 
 ## Phasing
 
-Production runs on one Azure VM (the gateway and Caddy, `deploy/`) behind Cloudflare, with Azure's managed Postgres (replacing Neon), Upstash Redis and Grafana Cloud. The spec's Render host and self-hosted Prometheus were dropped by the owner on 2026-11-23. Phase 2 adds the semantic cache, context handoff, Grafana Cloud dashboards and alerts, and custom endpoints behind an SSRF guard. Keep Phase 2 work out of Phase 1 paths except behind the flags above.
+Production runs on one Azure VM (two gateways, Caddy and a Redis for vectors, `deploy/`, at most 832 MiB, so a 2 GiB VM since the image builds there) behind Cloudflare, with Azure's managed Postgres (replacing Neon), Upstash Redis and Grafana Cloud. The spec's Render host and self-hosted Prometheus were dropped by the owner on 2026-11-23. Phase 2 adds the semantic cache, context handoff, Grafana Cloud dashboards and alerts, and custom endpoints behind an SSRF guard. Keep Phase 2 work out of Phase 1 paths except behind the flags above.
 
 Build order from the spec: skeleton (config, connections, migrations, health endpoints, request id, logging) → mock provider streaming through `/v1`, the first thing to demo → gateway keys, encrypted credentials, routes, control plane → real adapters → rate limiting, then routing with fallback → usage events and metrics (**Gate A: free launch**) → free-first routing and exact cache → Phase 2 (**Gate B: go live**).
 

@@ -26,22 +26,26 @@ type Check struct {
 
 // Health mounts the liveness and readiness probes at the server root, outside
 // /api, because an orchestrator calls them without a session and they are not
-// part of the control plane's CORS or CSRF surface.
-func Health(logger *slog.Logger, checks ...Check) func(mux *http.ServeMux) {
+// part of the control plane's CORS or CSRF surface. draining, when it reports
+// true, turns /healthz to 503; nil never does.
+func Health(logger *slog.Logger, draining func() bool, checks ...Check) func(mux *http.ServeMux) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return func(mux *http.ServeMux) {
-		mux.HandleFunc("GET /healthz", handleLive)
+		mux.HandleFunc("GET /healthz", handleServing(draining))
 		mux.HandleFunc("GET /readyz", handleReady(logger, checks))
 	}
 }
 
-// handleLive answers as long as the process is running. It touches no
-// dependency on purpose: a liveness probe that fails when Postgres is down
-// would have the orchestrator restart a healthy process, which fixes nothing.
-func handleLive(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, healthBody{Status: "ok"})
+func handleServing(draining func() bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if draining != nil && draining() {
+			writeJSON(w, http.StatusServiceUnavailable, healthBody{Status: "draining"})
+			return
+		}
+		writeJSON(w, http.StatusOK, healthBody{Status: "ok"})
+	}
 }
 
 // handleReady reports whether this instance can serve traffic, which means

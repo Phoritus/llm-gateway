@@ -1,18 +1,25 @@
-# The production stack on one VM: the gateway, Redis and Caddy for HTTPS.
-# Postgres is external (Neon or Azure), named by DATABASE_URL in .env.prod.
-# Run from this folder: docker compose up -d --build
+x-gateway: &gateway
+  build: ..
+  image: llm-gateway:local
+  env_file: [.env.prod, trusted-proxies.env]
+  environment:
+    # Below mem_limit, so the Go runtime collects harder before the kernel
+    # kills the container.
+    GOMEMLIMIT: 220MiB
+  mem_limit: 256m
+  # Past SHUTDOWN_TIMEOUT (25s by default), so the gateway's own drain ends
+  # before Docker's SIGKILL. Raise both together.
+  stop_grace_period: 35s
+  depends_on: [redis]
+  restart: unless-stopped
+
 services:
-  gateway:
-    build: ..
-    env_file: [.env.prod, trusted-proxies.env]
-    depends_on: [redis]
-    restart: unless-stopped
+  gateway-a: *gateway
+  gateway-b: *gateway
   redis:
-    image: redis:8-alpine
-    # Redis holds only state that can be lost: rate-limit buckets, skip flags,
-    # free-quota counters and cached answers. So no persistence, and a cap
-    # that fits a 1 GiB VM.
+    image: redis:8.10-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    mem_limit: 192m
     restart: unless-stopped
   caddy:
     image: caddy:2
@@ -24,8 +31,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    depends_on: [gateway]
+    mem_limit: 128m
+    depends_on: [gateway-a, gateway-b]
     restart: unless-stopped
+
 volumes:
   caddy_data:
   caddy_config:

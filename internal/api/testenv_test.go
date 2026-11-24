@@ -210,7 +210,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	})
 
 	mux := http.NewServeMux()
-	Health(deps.Logger,
+	Health(deps.Logger, nil,
 		Check{Name: "postgres", Ping: st.Ping},
 		Check{Name: "redis", Ping: func(ctx context.Context) error { return rdb.Ping(ctx).Err() }},
 	)(mux)
