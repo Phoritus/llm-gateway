@@ -152,20 +152,70 @@ func TestAnErrorThatStatesNoWindowIsNotRetried(t *testing.T) {
 	}
 }
 
-func TestWhatCanNeverBeDroppedOverTheWindowIsRefusedWithoutACall(t *testing.T) {
+func TestATargetWhoseWindowCannotHoldThePinnedMessagesIsStillCalled(t *testing.T) {
 	h := newHarness(t)
 	a, b := target("a", provider.VendorMock, "s"), target("b", provider.VendorMock, "t")
-	h.knowWindow(a, 300)
-	h.knowWindow(b, 200)
+	h.knowWindow(a, 1200)
+	h.knowWindow(b, 300)
 	req := &provider.ChatRequest{Messages: []provider.Message{say("system", strings.Repeat("s", 4000)), say("user", "hi")}}
-	res, called, _, err := h.route(store.HandoffTrim, req, nil, a, b)
-	wantCalled(t, called)
-	wantOutcomes(t, res.Steps, OutcomeContextTooLong, OutcomeContextTooLong)
-	if !res.Handoff.TargetRefused {
-		t.Error("not marked refused")
+	res, called, sent, err := h.route(store.HandoffTrim, req, map[string]func(*provider.ChatRequest) error{
+		"b": windowed(300),
+	}, a, b)
+	if err != nil {
+		t.Fatalf("the guessed window was wrong and a can answer: %v", err)
 	}
+	wantCalled(t, called, "a")
+	if sent[0] != req || !res.Handoff.Unfittable {
+		t.Errorf("a was not sent the request as it came, or handoff %+v not marked unfittable", res.Handoff)
+	}
+	if res.Attempts() != 1 {
+		t.Errorf("Attempts = %d, want 1", res.Attempts())
+	}
+
+	h = newHarness(t)
+	h.knowWindow(b, 300)
+	_, called, _, err = h.route(store.HandoffTrim, req, map[string]func(*provider.ChatRequest) error{"b": windowed(300)}, b)
+	wantCalled(t, called, "b")
 	if w, _ := provider.ContextLimit(err); !errors.Is(err, provider.ErrContextTooLong) || w != 300 {
-		t.Errorf("err = %v with window %d, want context too long stating the largest window, 300", err, w)
+		t.Errorf("err = %v with window %d, want the window the target stated", err, w)
+	}
+}
+
+// TestARefitThatCannotShrinkIsNotSent: an upstream over its window because of
+// max_tokens leaves nothing for fitting to cut, so the next target is tried
+// instead of the same request twice.
+func TestARefitThatCannotShrinkIsNotSent(t *testing.T) {
+	h := newHarness(t)
+	limited, a, b := target("r", provider.VendorMock, "r"), target("a", provider.VendorMock, "s"), target("b", provider.VendorMock, "t")
+	maxTokens := 8900
+	req := &provider.ChatRequest{MaxTokens: &maxTokens, Messages: []provider.Message{say("user", "hi")}}
+	_, called, _, err := h.route(store.HandoffTrim, req, map[string]func(*provider.ChatRequest) error{
+		"r": func(*provider.ChatRequest) error { return failure(provider.ErrRateLimited, 0) },
+		"a": func(*provider.ChatRequest) error {
+			return provider.ContextTooLong("This model's maximum context length is 8192 tokens. However, you requested 8910 tokens (10 in the messages, 8900 in the completion).", "")
+		},
+	}, limited, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalled(t, called, "r", "a", "b")
+}
+
+func TestARatioOneVendorShowedIsNotUsedForAnother(t *testing.T) {
+	h := newHarness(t)
+	a, b := target("a", provider.VendorGroq, "x"), target("b", provider.VendorMock, "y")
+	h.knowWindow(b, 16000)
+	req := longChat(6000)
+	_, called, sent, err := h.route(store.HandoffTrim, req, map[string]func(*provider.ChatRequest) error{
+		"a": func(r *provider.ChatRequest) error {
+			return provider.ContextTooLong(fmt.Sprintf("maximum context length is 2000 tokens. However, your messages resulted in %d tokens.", 4*handoff.Estimate(r)), "")
+		},
+	}, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := sent[len(sent)-1]; called[len(called)-1] != "b" || last != req {
+		t.Errorf("called %v; b was sent %d of %d tokens, want the request as it came", called, handoff.Estimate(last), handoff.Estimate(req))
 	}
 }
 

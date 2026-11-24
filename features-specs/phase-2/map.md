@@ -161,7 +161,9 @@ point), `grilling` needs the user's decisions before anything is built,
   half (`Fit`, `Budget`, the catalogue). The catalogue is a file embedded
   at build time by `make windows`, not a table: learned windows win, and
   the upstreams' windows change far less often than their free quotas.
-  A local refusal (pinned messages over the window) counts as a hop.
+  Fitting never refuses a target on its own: one whose window cannot hold
+  the pinned messages is sent the request as it came, since the window may
+  be the catalogue's guess, and its error decides.
 
 ## Fog
 
@@ -170,5 +172,8 @@ point), `grilling` needs the user's decisions before anything is built,
   own repo (R24 is wontfix here). Until it serves `/reset-password`, the
   mailed reset link answers 404.
 - `GET /v1/models/{id}` (from R23), when a client is found that needs it.
+- A window learned from an error is only ever lowered or replaced by another
+  error, never raised by a success, so a small one learned on a free tier
+  keeps trimming for its 7 days (from ticket 07's review).
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`
   stops re-deriving the burst clamp (from R23's review).

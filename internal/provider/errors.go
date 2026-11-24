@@ -78,6 +78,9 @@ func ContextTooLong(message, detail string) *Error {
 // contextLimits are the ways the upstreams state a window and a request size.
 // Each pattern names its numbers window and requested.
 var contextLimits = []*regexp.Regexp{
+	// OpenAI, when max_tokens pushed it over: "you requested 8910 tokens (10
+	// in the messages, 8900 in the completion)". The prompt is the messages.
+	regexp.MustCompile(`(?i)maximum context length is (?P<window>\d+).*?\((?P<requested>\d+) in the messages`),
 	// OpenAI, OpenRouter, Groq, vLLM: "maximum context length is 8192 tokens.
 	// However, your messages resulted in 9000 tokens" / "you requested about
 	// 140000 tokens".

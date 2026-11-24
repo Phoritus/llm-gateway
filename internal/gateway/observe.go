@@ -39,18 +39,18 @@ var (
 	fallbackAttempts, _ = meter.Int64Histogram("gateway.fallback.attempts",
 		metric.WithDescription("Targets called for one request."))
 	contextHandoff, _ = meter.Int64Counter("gateway.context_handoff",
-		metric.WithDescription("Requests context handoff changed, by action: reordered, trimmed or refused."))
+		metric.WithDescription("Requests context handoff changed, by action: reordered, trimmed or unfittable."))
 )
 
-const handoffRefused = "refused"
+const handoffUnfittable = "unfittable"
 
 func countHandoff(ctx context.Context, h router.Handoff) {
 	var actions []string
 	if a := h.Action(); a != "" {
 		actions = append(actions, string(a))
 	}
-	if h.TargetRefused {
-		actions = append(actions, handoffRefused)
+	if h.Unfittable {
+		actions = append(actions, handoffUnfittable)
 	}
 	for _, a := range actions {
 		contextHandoff.Add(ctx, 1, metric.WithAttributes(attribute.String("action", a)))

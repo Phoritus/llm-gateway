@@ -8,6 +8,7 @@ func TestContextTooLongReadsTheStatedNumbers(t *testing.T) {
 		window, requested int
 	}{
 		{"openai", "This model's maximum context length is 8192 tokens. However, your messages resulted in 9013 tokens. Please reduce the length of the messages.", 8192, 9013},
+		{"openai, completion included", "This model's maximum context length is 8192 tokens. However, you requested 8910 tokens (10 in the messages, 8900 in the completion). Please reduce the length of the messages or completion.", 8192, 10},
 		{"openrouter", "This endpoint's maximum context length is 131072 tokens. However, you requested about 140211 tokens (140211 of text input).", 131072, 140211},
 		{"groq", "Please reduce the length of the messages or completion. The maximum context length is 8192 tokens.", 8192, 0},
 		{"anthropic", "prompt is too long: 210000 tokens > 200000 maximum", 200000, 210000},

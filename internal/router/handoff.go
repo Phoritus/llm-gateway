@@ -22,9 +22,9 @@ type Handoff struct {
 	Reordered bool
 	// Fitted is what was cut from the request the answering target was sent.
 	Fitted handoff.Report
-	// TargetRefused is set when a target was not called because even the messages
-	// fitting never drops would not fit its window.
-	TargetRefused bool
+	// Unfittable is set when a target's window could not hold even what
+	// fitting never drops, so the target was sent the request as it came.
+	Unfittable bool
 }
 
 // Action is the one name the request is recorded under.

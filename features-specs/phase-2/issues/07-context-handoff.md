@@ -51,8 +51,8 @@ Built as specified, behind `CONTEXT_HANDOFF`:
   (`internal/handoff/windows.json`) is imported offline from OpenRouter and
   LiteLLM by `make windows`.
 - `router.Run` reorders, fits each target with a known window on `trim`
-  routes, and calls a target once more, fitted, when its error states a
-  window. The first user message is not pinned.
+  routes, and calls a target once more when its error makes the fitted
+  request smaller. The first user message is not pinned.
 - `X-Context-Handoff`, `+trimmed` on the trail, the usage event,
   `gateway.context_handoff` by action, and no cache store for a trimmed
   answer.

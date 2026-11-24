@@ -265,8 +265,8 @@ func handoffHeader(h router.Handoff) string {
 		return fmt.Sprintf("%s; omitted=%d; cleared_tool_results=%d", a, h.Fitted.OmittedMessages, h.Fitted.ClearedToolResults)
 	case a != "":
 		return string(a)
-	case h.TargetRefused:
-		return handoffRefused
+	case h.Unfittable:
+		return handoffUnfittable
 	}
 	return ""
 }

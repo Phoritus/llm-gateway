@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,6 +201,12 @@ func Fit(req *provider.ChatRequest, budget int) (*provider.ChatRequest, Report, 
 	}
 	fitted := *req
 	fitted.Messages = append(out, last.msgs...)
+	rep.ClearedToolResults = 0
+	for _, m := range fitted.Messages {
+		if bytes.Equal(m.Content, placeholder) {
+			rep.ClearedToolResults++
+		}
+	}
 	return &fitted, rep, nil
 }
 

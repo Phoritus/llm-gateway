@@ -135,8 +135,8 @@ func (r *Router) Wait() { r.pending.Wait() }
 //
 // Context handoff follows the route's mode. reorder and trim try the targets
 // whose known window fits req first. trim also sends each target with a known
-// window req fitted to it, and a target that refuses req for its length while
-// stating its window is called once more, fitted to that window. Windows
+// window req fitted to it, and a target that refuses req for its length is
+// called once more when what it said makes the fitted request smaller. Windows
 // stated in errors are kept whatever the mode.
 func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, req *provider.ChatRequest, attempt Attempt) (Result, error) {
 	var (
@@ -148,12 +148,32 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, req *provi
 		// Another credential for the same model has the same window.
 		tooLong  = map[string]bool{}
 		refitted = map[int]bool{}
-		scale    = handoff.DefaultRatio
+		// scales holds, per vendor, the upstream tokens per estimated token
+		// an error showed: another vendor's tokenizer counts differently.
+		scales = map[provider.Vendor]float64{}
 	)
 	known := r.lookup(ctx, route.Targets)
 	targets, mode := route.Targets, route.ContextHandoff
 	if mode == store.HandoffReorder || mode == store.HandoffTrim {
 		targets, res.Handoff.Reordered = fitsFirst(targets, known, req)
+	}
+	// fit is req as t is to be sent it. ok is false when not even what
+	// fitting never drops is under t's window: t is then sent req as it
+	// came, and its own error decides, since the window may be a guess.
+	fit := func(t store.ResolvedTarget) (send *provider.ChatRequest, rep handoff.Report, ok bool) {
+		w := known.windowOf(t)
+		if w == 0 || mode != store.HandoffTrim {
+			return req, rep, true
+		}
+		scale := scales[t.Vendor]
+		if scale == 0 {
+			scale = handoff.DefaultRatio
+		}
+		send, rep, err := handoff.Fit(req, handoff.Budget(w, req.MaxTokens, scale))
+		if err != nil {
+			return req, handoff.Report{}, false
+		}
+		return send, rep, true
 	}
 
 	for i := 0; i < len(targets); i++ {
@@ -177,23 +197,14 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, req *provi
 			started = now
 		}
 
-		send, fitted := req, handoff.Report{}
-		if w := known.windowOf(t); w > 0 && mode == store.HandoffTrim {
-			var err error
-			send, fitted, err = handoff.Fit(req, handoff.Budget(w, req.MaxTokens, scale))
-			if err != nil {
-				res.Handoff.TargetRefused = true
-				tooLong[t.Model] = true
-				err = &provider.Error{Kind: provider.ErrContextTooLong, Window: w, Detail: err.Error()}
-				seen.failed(ruleFor(err), nil)
-				seen.tooLong(err)
-				step.Outcome, step.Err = OutcomeContextTooLong, err
-				res.Steps = append(res.Steps, step)
-				continue
-			}
-			step.Trimmed = fitted.Changed()
+		send, fitted, ok := fit(t)
+		if !ok {
+			res.Handoff.Unfittable = true
 		}
-		budgetWithWaits += extraWait(t)
+		step.Trimmed = fitted.Changed()
+		if !refitted[i] {
+			budgetWithWaits += extraWait(t)
+		}
 
 		stream, first, err := attempt(ctx, t, send)
 		if err == nil {
@@ -226,16 +237,16 @@ func (r *Router) Run(ctx context.Context, route *store.ResolvedRoute, req *provi
 			known[key] = s.encode()
 		}
 		if rl.outcome == OutcomeContextTooLong {
-			before := known.windowOf(t)
 			w, requested := provider.ContextLimit(err)
 			if w > 0 {
 				r.learnWindow(ctx, t, w, known)
 			}
-			learned := ratio(requested, send)
-			if learned > 0 {
-				scale = learned
+			if q := ratio(requested, send); q > 0 {
+				scales[t.Vendor] = q
 			}
-			if mode == store.HandoffTrim && w > 0 && !refitted[i] && (w != before || learned > 0) {
+			// Called once more only with a request that is strictly smaller
+			// than the one it refused: the same one would fail the same way.
+			if next, _, ok := fit(t); ok && !refitted[i] && handoff.Estimate(next) < handoff.Estimate(send) {
 				refitted[i] = true
 				i--
 			} else {
