@@ -13,7 +13,7 @@ func TestBuildMessageWritesHeadersAndBody(t *testing.T) {
 	body, err := buildMessage("no-reply@example.com", Message{
 		To:      "user@example.org",
 		Subject: "Confirm your email address",
-		Body:    "Use this link:\n\nhttps://gateway.example.com/api/auth/verify-email?token=abc\n",
+		Body:    "Use this link:\n\nhttps://gateway.example.com/verify-email?token=abc\n",
 	})
 	if err != nil {
 		t.Fatalf("buildMessage() = %v, want no error", err)

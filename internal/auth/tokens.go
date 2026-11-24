@@ -19,7 +19,7 @@ var ErrInvalidToken = errors.New("auth: token is invalid or expired")
 // IssueVerification mints an email-verification token and sends the link. Any
 // outstanding token for the same user is replaced, so the newest link is the
 // only one that works.
-func (s *Service) IssueVerification(ctx context.Context, userID, email, baseURL string, mailer Mailer) error {
+func (s *Service) IssueVerification(ctx context.Context, userID, email, dashboardURL string, mailer Mailer) error {
 	token, hash, err := newSecret()
 	if err != nil {
 		return err
@@ -27,7 +27,7 @@ func (s *Service) IssueVerification(ctx context.Context, userID, email, baseURL 
 	if err := s.store.CreateVerificationToken(ctx, userID, hash, time.Now().Add(s.cfg.VerificationTTL)); err != nil {
 		return err
 	}
-	link := fmt.Sprintf("%s/api/auth/verify-email?token=%s", baseURL, url.QueryEscape(token))
+	link := fmt.Sprintf("%s/verify-email?token=%s", dashboardURL, url.QueryEscape(token))
 	return mailer.Send(ctx, Message{
 		To:      email,
 		Subject: "Confirm your email address",
@@ -54,7 +54,7 @@ func (s *Service) ConsumeVerification(ctx context.Context, token string) error {
 }
 
 // IssuePasswordReset mints a reset token and sends the link.
-func (s *Service) IssuePasswordReset(ctx context.Context, userID, email, baseURL string, mailer Mailer) error {
+func (s *Service) IssuePasswordReset(ctx context.Context, userID, email, dashboardURL string, mailer Mailer) error {
 	token, hash, err := newSecret()
 	if err != nil {
 		return err
@@ -62,7 +62,7 @@ func (s *Service) IssuePasswordReset(ctx context.Context, userID, email, baseURL
 	if err := s.store.CreatePasswordResetToken(ctx, userID, hash, time.Now().Add(s.cfg.ResetTTL)); err != nil {
 		return err
 	}
-	link := fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
+	link := fmt.Sprintf("%s/reset-password?token=%s", dashboardURL, url.QueryEscape(token))
 	return mailer.Send(ctx, Message{
 		To:      email,
 		Subject: "Reset your password",
