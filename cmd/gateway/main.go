@@ -484,7 +484,7 @@ func flushQueues(by time.Time, queues ...interface{ Close(context.Context) }) {
 const semanticEmbedTimeout = 2 * time.Second
 
 func newVectorRedis(ctx context.Context, url string, logger *slog.Logger) (*redis.Client, error) {
-	opts, err := redis.ParseURL(url)
+	opts, err := store.RedisOptions(url)
 	if err != nil {
 		return nil, fmt.Errorf("parse VECTOR_REDIS_URL: %w", err)
 	}
