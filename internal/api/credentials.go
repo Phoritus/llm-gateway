@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 
 	"llm-gateway/internal/auth"
 	"llm-gateway/internal/egress"
+	"llm-gateway/internal/keycheck"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/telemetry"
@@ -29,18 +29,27 @@ const (
 )
 
 type credentialView struct {
-	ID        string    `json:"id"`
-	Provider  string    `json:"provider"`
-	Name      string    `json:"name"`
-	Last4     string    `json:"last4"`
-	BaseURL   *string   `json:"base_url"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string        `json:"id"`
+	Provider  string        `json:"provider"`
+	Name      string        `json:"name"`
+	Last4     string        `json:"last4"`
+	BaseURL   *string       `json:"base_url"`
+	CreatedAt time.Time     `json:"created_at"`
+	LastCheck *keyCheckView `json:"last_check"`
+}
+
+type keyCheckView struct {
+	Result    store.KeyCheckResult `json:"result"`
+	CheckedAt time.Time            `json:"checked_at"`
 }
 
 func viewOf(c store.Credential) credentialView {
 	v := credentialView{ID: c.ID, Provider: string(c.Provider), Name: c.Name, Last4: c.Last4, CreatedAt: c.CreatedAt}
 	if c.BaseURL != "" {
 		v.BaseURL = &c.BaseURL
+	}
+	if c.LastCheck != nil {
+		v.LastCheck = &keyCheckView{Result: c.LastCheck.Result, CheckedAt: c.LastCheck.At}
 	}
 	return v
 }
@@ -115,8 +124,6 @@ func (d Deps) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const keyTestTimeout = 10 * time.Second
-
 type keyTestResult struct {
 	OK      bool   `json:"ok"`
 	Code    string `json:"code,omitempty"`
@@ -136,16 +143,7 @@ func (d Deps) handleTestCredential(w http.ResponseWriter, r *http.Request) {
 		d.serverErrorf(w, r, err, "unseal credential")
 		return
 	}
-	adapter, ok := d.Providers[cred.Vendor]
-	if !ok {
-		writeJSON(w, http.StatusOK, keyTestResult{Code: "provider_unavailable",
-			Message: "This provider is not available on this gateway yet."})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), keyTestTimeout)
-	defer cancel()
-	err = adapter.CheckKey(ctx, provider.Credential{APIKey: cred.Secret, BaseURL: cred.BaseURL})
+	result, err := keycheck.Check(r.Context(), d.Providers, cred)
 	if r.Context().Err() != nil {
 		return
 	}
@@ -154,24 +152,29 @@ func (d Deps) handleTestCredential(w http.ResponseWriter, r *http.Request) {
 			slog.String("request_id", telemetry.RequestIDFrom(r.Context())),
 			slog.String("vendor", string(cred.Vendor)), slog.String("error", err.Error()))
 	}
-	writeJSON(w, http.StatusOK, keyTestOutcome(err))
+	id := chi.URLParam(r, "id")
+	if err := d.Credentials.RecordCheck(r.Context(), auth.WorkspaceID(r.Context()), id,
+		store.KeyCheck{Result: result, At: time.Now()}); err != nil && !errors.Is(err, store.ErrNotFound) {
+		d.serverErrorf(w, r, err, "record key check")
+		return
+	}
+	writeJSON(w, http.StatusOK, keyTestOutcome(result))
 }
 
-func keyTestOutcome(err error) keyTestResult {
-	switch {
-	case err == nil:
+var keyTestMessages = map[store.KeyCheckResult]string{
+	store.KeyCheckRejected:            "The provider rejected this key.",
+	store.KeyCheckQuotaExhausted:      "The provider accepted this key, but its account has no quota or credit left.",
+	store.KeyCheckRateLimited:         "The provider is rate limiting this key. Try the test again later.",
+	store.KeyCheckProviderTimeout:     "The provider did not answer in time.",
+	store.KeyCheckProviderError:       "The provider could not check this key.",
+	store.KeyCheckProviderUnavailable: "This provider is not available on this gateway yet.",
+}
+
+func keyTestOutcome(result store.KeyCheckResult) keyTestResult {
+	if result == store.KeyCheckOK {
 		return keyTestResult{OK: true}
-	case errors.Is(err, provider.ErrAuth), errors.Is(err, provider.ErrModelUnavailable):
-		return keyTestResult{Code: "key_rejected", Message: "The provider rejected this key."}
-	case errors.Is(err, provider.ErrQuota):
-		return keyTestResult{Code: "quota_exhausted", Message: "The provider accepted this key, but its account has no quota or credit left."}
-	case errors.Is(err, provider.ErrRateLimited):
-		return keyTestResult{Code: "rate_limited", Message: "The provider is rate limiting this key. Try the test again later."}
-	case errors.Is(err, provider.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
-		return keyTestResult{Code: "provider_timeout", Message: "The provider did not answer in time."}
-	default:
-		return keyTestResult{Code: "provider_error", Message: "The provider could not check this key."}
 	}
+	return keyTestResult{Code: string(result), Message: keyTestMessages[result]}
 }
 
 func parseVendorField(w http.ResponseWriter, raw string, production bool) (provider.Vendor, bool) {

@@ -25,6 +25,7 @@ import (
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
+	"llm-gateway/internal/keycheck"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/anthropic"
 	"llm-gateway/internal/provider/mock"
@@ -55,6 +56,9 @@ const (
 	// catalogInterval is how often the free quota catalog is read again, which
 	// is how long a corrected row takes to apply.
 	catalogInterval = 10 * time.Minute
+	keyCheckEvery   = 24 * time.Hour
+	keyCheckTick    = time.Minute
+	keyCheckBatch   = 5
 )
 
 func main() {
@@ -259,10 +263,11 @@ func run(logger *slog.Logger) error {
 
 	limiter := ratelimit.New(rdb)
 
+	credentials := store.NewCredentials(st, keyring)
 	deps := api.Deps{
 		Config:      cfg,
 		Store:       st,
-		Credentials: store.NewCredentials(st, keyring),
+		Credentials: credentials,
 		Providers:   providers,
 		GatewayKeys: gatewayKeys,
 		Auth:        authSvc,
@@ -388,6 +393,9 @@ func run(logger *slog.Logger) error {
 	go usageRecorder.Run(sweeperCtx)
 	go usage.RunRetention(sweeperCtx, st, cfg.UsageRetention, retentionInterval, logger)
 	go catalog.Run(sweeperCtx, st, catalogInterval, logger)
+	keyChecker := &keycheck.Checker{Store: credentials, Providers: providers,
+		Interval: keyCheckEvery, PerTick: keyCheckBatch, Logger: logger}
+	go keyChecker.Run(sweeperCtx, keyCheckTick)
 	go func() {
 		defer close(flusherDone)
 		gatewayKeys.RunLastUsedFlusher(sweeperCtx, logger)

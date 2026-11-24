@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
@@ -191,5 +192,50 @@ func TestCredentialKeyTest(t *testing.T) {
 	}
 	if res := alice.do(http.MethodPost, "/api/credentials/not-a-uuid/test", nil); res.status != http.StatusNotFound {
 		t.Errorf("malformed id: %d %s", res.status, res.raw)
+	}
+}
+
+func TestKeyTestRecordsItsResultOnTheCredential(t *testing.T) {
+	env := newTestEnv(t)
+	alice := env.signupAndLogin("alice@example.com")
+
+	lastCheckOf := func(id string) any {
+		res := alice.do(http.MethodGet, "/api/credentials", nil)
+		data, _ := res.body["data"].([]any)
+		for _, row := range data {
+			m, _ := row.(map[string]any)
+			if m["id"] == id {
+				v, present := m["last_check"]
+				if !present {
+					t.Fatalf("credential %s has no last_check field: %s", id, res.raw)
+				}
+				return v
+			}
+		}
+		t.Fatalf("credential %s not listed: %s", id, res.raw)
+		return nil
+	}
+
+	bad := createCredential(alice, map[string]any{"provider": "groq", "secret": "sk-live-not-the-right-key-0000"}).body["id"].(string)
+	untested := createCredential(alice, map[string]any{"provider": "groq", "secret": apiTestSecret}).body["id"].(string)
+
+	if v := lastCheckOf(bad); v != nil {
+		t.Fatalf("before any check last_check = %v, want null", v)
+	}
+
+	before := time.Now().Add(-time.Second)
+	if res := alice.do(http.MethodPost, "/api/credentials/"+bad+"/test", nil); res.status != http.StatusOK {
+		t.Fatalf("test: %d %s", res.status, res.raw)
+	}
+	got, _ := lastCheckOf(bad).(map[string]any)
+	if got["result"] != "key_rejected" {
+		t.Fatalf("last_check = %v, want result key_rejected", got)
+	}
+	at, err := time.Parse(time.RFC3339Nano, got["checked_at"].(string))
+	if err != nil || at.Before(before) {
+		t.Fatalf("checked_at = %v (%v), want a time since the test", got["checked_at"], err)
+	}
+	if v := lastCheckOf(untested); v != nil {
+		t.Fatalf("an untested credential's last_check = %v, want null", v)
 	}
 }
