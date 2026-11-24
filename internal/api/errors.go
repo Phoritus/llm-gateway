@@ -35,6 +35,16 @@ type errorDetail struct {
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
+	respondJSON(w, status, body, true)
+}
+
+// writeJSONUnescaped leaves <, > and & as they are, for bodies full of
+// stored text, where each would otherwise grow to six bytes.
+func writeJSONUnescaped(w http.ResponseWriter, status int, body any) {
+	respondJSON(w, status, body, false)
+}
+
+func respondJSON(w http.ResponseWriter, status int, body any, escapeHTML bool) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// Error and account responses must never be cached by a proxy or the
 	// browser's back button.
@@ -43,7 +53,9 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	if body == nil {
 		return
 	}
-	if err := json.NewEncoder(w).Encode(body); err != nil {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(escapeHTML)
+	if err := enc.Encode(body); err != nil {
 		// The status line is already sent, so there is nothing to do but
 		// record it.
 		slog.Error("encode response", slog.String("error", err.Error()))

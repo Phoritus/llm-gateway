@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
 	"llm-gateway/internal/keycheck"
+	"llm-gateway/internal/promptlog"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/anthropic"
 	"llm-gateway/internal/provider/mock"
@@ -126,7 +128,7 @@ type shutdownPlan struct {
 	deregisterBy time.Time
 	// drainBy is when requests still in flight are cut.
 	drainBy time.Time
-	// flushBy is when the usage flush stops, leaving the rest to telemetry.
+	// flushBy is when the queues' flush stops, leaving the rest to telemetry.
 	flushBy time.Time
 	stopBy  time.Time
 }
@@ -303,6 +305,10 @@ func run(logger *slog.Logger) error {
 	if err := usageRecorder.RegisterMetrics(); err != nil {
 		return err
 	}
+	promptLog := promptlog.NewRecorder(st, logger)
+	if err := promptLog.RegisterMetrics(); err != nil {
+		return err
+	}
 	v1Limiter := ratelimit.NewFailOpen(limiter, ratelimit.NewLocal(), logger)
 
 	// A catalog that cannot be read leaves every route in its own order, which
@@ -344,6 +350,7 @@ func run(logger *slog.Logger) error {
 		Providers:      providers,
 		Router:         fallback,
 		Usage:          usageRecorder,
+		PromptLog:      promptLog,
 		Timeout:        cfg.V1RequestTimeout,
 		Cache:          responseCache,
 		Semantic:       semanticCache,
@@ -391,7 +398,9 @@ func run(logger *slog.Logger) error {
 	}()
 	go authSvc.RunSweeper(sweeperCtx, 0, logger)
 	go usageRecorder.Run(sweeperCtx)
+	go promptLog.Run(sweeperCtx)
 	go usage.RunRetention(sweeperCtx, st, cfg.UsageRetention, retentionInterval, logger)
+	go promptlog.RunRetention(sweeperCtx, st, retentionInterval, logger)
 	go catalog.Run(sweeperCtx, st, catalogInterval, logger)
 	keyChecker := &keycheck.Checker{Store: credentials, Providers: providers,
 		Interval: keyCheckEvery, PerTick: keyCheckBatch, Logger: logger}
@@ -440,14 +449,23 @@ func run(logger *slog.Logger) error {
 	// The last failures' skips are still being written, and the deferred
 	// Redis close would cut them off.
 	fallback.Wait()
-	// Last among the writers, while the pool is still open. A request that was
-	// cut above may record after this; its event is counted as dropped for
-	// shutdown.
-	flushCtx, cancelFlush := context.WithDeadline(context.Background(), plan.flushBy)
-	defer cancelFlush()
-	usageRecorder.Close(flushCtx)
+	// The deferred pool close would cut off a queue still writing.
+	flushQueues(plan.flushBy, usageRecorder, promptLog)
 	logger.Info("stopped")
 	return nil
+}
+
+// flushQueues writes what every queue holds, together, giving up at by. A
+// request that was cut above may record after this; its item is counted as
+// dropped for shutdown.
+func flushQueues(by time.Time, queues ...interface{ Close(context.Context) }) {
+	ctx, cancel := context.WithDeadline(context.Background(), by)
+	defer cancel()
+	var flushed sync.WaitGroup
+	for _, q := range queues {
+		flushed.Go(func() { q.Close(ctx) })
+	}
+	flushed.Wait()
 }
 
 const semanticEmbedTimeout = 2 * time.Second

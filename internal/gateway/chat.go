@@ -64,7 +64,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, bodyBytes, ok := decodeChatRequest(w, r)
+	req, body, ok := decodeChatRequest(w, r)
 	if !ok {
 		return
 	}
@@ -85,7 +85,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// The limits come before the route is resolved: resolving it is a
 	// Postgres query, and a key past its limit should not get to make one.
-	estimate := estimateTokens(bodyBytes)
+	estimate := estimateTokens(len(body))
 	reserved, ok := d.reserve(w, r, key, estimate)
 	if !ok {
 		return
@@ -106,6 +106,9 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	obs.routed, obs.alias = true, req.Model
+	if route.Settings.PromptLogging {
+		obs.prompt = body
+	}
 
 	var (
 		stream provider.Stream
@@ -145,7 +148,8 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		d.logAttempts(r, res.Steps)
 		setFallbackHeaders(w.Header(), res)
 		if err != nil {
-			obs.status, obs.outcome = d.writeUpstreamError(w, r, withDeadline(ctx, err))
+			obs.failure = withDeadline(ctx, err)
+			obs.status, obs.outcome = d.writeUpstreamError(w, r, obs.failure)
 			return
 		}
 		stream, first, obs.target = res.Stream, res.First, res.Target
@@ -158,6 +162,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	whole := &assembled{Stream: stream}
 	whole.answer.Add(first)
+	obs.answer = whole
 	if req.Stream {
 		wantsUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 		obs.outcome = d.streamResponse(w, r, whole, first, charged, wantsUsage)
@@ -169,6 +174,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			if err != nil {
 				// Nothing has been written yet, so this is still a status.
+				obs.failure = withDeadline(ctx, err)
 				obs.status, obs.outcome = d.failBeforeFirstByte(w, r, err)
 				return
 			}
@@ -373,16 +379,15 @@ func withDeadline(ctx context.Context, err error) error {
 
 // decodeChatRequest reads and validates the body. Unknown fields are
 // accepted: OpenAI clients send many this gateway has no use for, and
-// refusing them would break every SDK. The body's length is returned with
-// the request, as the basis of the token estimate.
-func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRequest, int, bool) {
+// refusing them would break every SDK.
+func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRequest, []byte, bool) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, typeInvalidRequest, "body_too_large",
 				"The request body is too large.")
-			return nil, 0, false
+			return nil, nil, false
 		}
 		if errors.Is(err, os.ErrDeadlineExceeded) {
 			// Without this, net/http reads the rest of the promised body before
@@ -390,39 +395,39 @@ func decodeChatRequest(w http.ResponseWriter, r *http.Request) (*provider.ChatRe
 			w.Header().Set("Connection", "close")
 			writeError(w, http.StatusRequestTimeout, typeInvalidRequest, "request_timeout",
 				"The request body was not received in time.")
-			return nil, 0, false
+			return nil, nil, false
 		}
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_body",
 			"The request body could not be read.")
-		return nil, 0, false
+		return nil, nil, false
 	}
 
 	var req provider.ChatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, typeInvalidRequest, "invalid_json",
 			"The request body must be a JSON object in the chat completions format.")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if strings.TrimSpace(req.Model) == "" {
 		invalidField(w, "model", "model is required.")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	if len(req.Messages) == 0 {
 		invalidField(w, "messages", "messages must contain at least one message.")
-		return nil, 0, false
+		return nil, nil, false
 	}
 	for _, m := range req.Messages {
 		if !knownRoles[m.Role] {
 			invalidField(w, "messages",
 				"Every message needs a role of system, developer, user, assistant or tool.")
-			return nil, 0, false
+			return nil, nil, false
 		}
 		if !contentShapeOK(m.Content) {
 			invalidField(w, "messages", "A message's content must be a string, an array of parts, or null.")
-			return nil, 0, false
+			return nil, nil, false
 		}
 	}
-	return &req, len(body), true
+	return &req, body, true
 }
 
 // knownRoles are the roles OpenAI's chat format defines. "function" is the

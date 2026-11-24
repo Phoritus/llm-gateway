@@ -32,6 +32,9 @@ type Deps struct {
 	// Usage takes one event per request that resolved a route. Required, and
 	// it must not wait: the response is not held up by usage history.
 	Usage UsageRecorder
+	// PromptLog takes the body and answer of each request from a workspace
+	// that turned prompt logging on. It must not wait. Nil logs nothing.
+	PromptLog PromptLogger
 	// Timeout is the deadline on one request, streaming included.
 	Timeout time.Duration
 	// Limiter and Limits bound what a key and a workspace may spend. Both are

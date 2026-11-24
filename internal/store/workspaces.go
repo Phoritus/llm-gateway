@@ -57,6 +57,22 @@ type WorkspaceSettings struct {
 	// SemanticCache opts the workspace into the semantic cache, which also
 	// needs the deployment to run with SEMANTIC_CACHE on.
 	SemanticCache bool `json:"semantic_cache,omitempty"`
+	// PromptLogging stores each request's body and answer in request_logs.
+	PromptLogging bool `json:"prompt_logging,omitempty"`
+	// PromptLogRetentionDays is how long a stored log is kept; zero is
+	// DefaultPromptLogRetentionDays.
+	PromptLogRetentionDays int `json:"prompt_log_retention_days,omitempty"`
+}
+
+// DefaultPromptLogRetentionDays is the retention of a workspace that set none.
+const DefaultPromptLogRetentionDays = 7
+
+// LogRetentionDays is PromptLogRetentionDays with its default applied.
+func (s WorkspaceSettings) LogRetentionDays() int {
+	if s.PromptLogRetentionDays <= 0 {
+		return DefaultPromptLogRetentionDays
+	}
+	return s.PromptLogRetentionDays
 }
 
 func (s *Store) WorkspaceSettings(ctx context.Context, workspaceID string) (WorkspaceSettings, error) {
