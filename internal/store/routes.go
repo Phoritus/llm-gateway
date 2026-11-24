@@ -46,16 +46,39 @@ func ParseCacheMode(s string) (CacheMode, bool) {
 	return "", false
 }
 
+// HandoffMode is a route's context handoff policy.
+type HandoffMode string
+
+const (
+	HandoffOff HandoffMode = "off"
+	// HandoffReorder tries the targets whose known context window fits the
+	// request first, and changes nothing the request says.
+	HandoffReorder HandoffMode = "reorder"
+	// HandoffTrim also fits the conversation to a target's window when it is
+	// too long for it.
+	HandoffTrim HandoffMode = "trim"
+)
+
+// ParseHandoffMode accepts only the exact lowercase name.
+func ParseHandoffMode(s string) (HandoffMode, bool) {
+	switch m := HandoffMode(s); m {
+	case HandoffOff, HandoffReorder, HandoffTrim:
+		return m, true
+	}
+	return "", false
+}
+
 type Route struct {
-	ID          string
-	WorkspaceID string
-	Alias       string
-	FreeFirst   bool
-	Cache       CacheMode
-	MaxHops     int
-	Targets     []RouteTarget
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             string
+	WorkspaceID    string
+	Alias          string
+	FreeFirst      bool
+	Cache          CacheMode
+	ContextHandoff HandoffMode
+	MaxHops        int
+	Targets        []RouteTarget
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // RouteTarget is one entry in a route's chain. Its position is its index in
@@ -76,18 +99,19 @@ const (
 )
 
 type RouteSpec struct {
-	Alias     string
-	FreeFirst bool
-	Cache     CacheMode
-	MaxHops   int
-	Targets   []RouteTarget
+	Alias          string
+	FreeFirst      bool
+	Cache          CacheMode
+	ContextHandoff HandoffMode
+	MaxHops        int
+	Targets        []RouteTarget
 }
 
-const routeColumns = `id, workspace_id, alias, free_first, cache, max_hops, created_at, updated_at`
+const routeColumns = `id, workspace_id, alias, free_first, cache, context_handoff, max_hops, created_at, updated_at`
 
 func scanRoute(row pgx.Row) (Route, error) {
 	var r Route
-	err := row.Scan(&r.ID, &r.WorkspaceID, &r.Alias, &r.FreeFirst, &r.Cache, &r.MaxHops, &r.CreatedAt, &r.UpdatedAt)
+	err := row.Scan(&r.ID, &r.WorkspaceID, &r.Alias, &r.FreeFirst, &r.Cache, &r.ContextHandoff, &r.MaxHops, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 
@@ -123,11 +147,11 @@ func (s *Store) CreateRoute(ctx context.Context, workspaceID string, in RouteSpe
 	}
 
 	r, err := scanRoute(tx.QueryRow(ctx,
-		`INSERT INTO routes (id, workspace_id, alias, free_first, cache, max_hops)
-		 SELECT $1, $2, $3, $4, $5, $6
-		  WHERE (SELECT count(*) FROM routes WHERE workspace_id = $2) < $7
+		`INSERT INTO routes (id, workspace_id, alias, free_first, cache, context_handoff, max_hops)
+		 SELECT $1, $2, $3, $4, $5, $6, $7
+		  WHERE (SELECT count(*) FROM routes WHERE workspace_id = $2) < $8
 		 RETURNING `+routeColumns,
-		uuid.NewString(), workspaceID, in.Alias, in.FreeFirst, in.Cache, in.MaxHops, maxRoutesPerWorkspace))
+		uuid.NewString(), workspaceID, in.Alias, in.FreeFirst, in.Cache, in.ContextHandoff, in.MaxHops, maxRoutesPerWorkspace))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrLimitReached
@@ -166,10 +190,10 @@ func (s *Store) UpdateRoute(ctx context.Context, workspaceID, id string, in Rout
 	}
 
 	r, err := scanRoute(tx.QueryRow(ctx,
-		`UPDATE routes SET alias = $3, free_first = $4, cache = $5, max_hops = $6, updated_at = now()
+		`UPDATE routes SET alias = $3, free_first = $4, cache = $5, context_handoff = $6, max_hops = $7, updated_at = now()
 		  WHERE workspace_id = $1 AND id = $2
 		 RETURNING `+routeColumns,
-		workspaceID, id, in.Alias, in.FreeFirst, in.Cache, in.MaxHops))
+		workspaceID, id, in.Alias, in.FreeFirst, in.Cache, in.ContextHandoff, in.MaxHops))
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrNotFound

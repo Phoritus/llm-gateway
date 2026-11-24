@@ -23,6 +23,18 @@ const (
 // client that hung up is not the service failing.
 var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone)}
 
+// HandoffAction is what context handoff did to a request. Empty is nothing.
+type HandoffAction string
+
+const (
+	// HandoffReordered is a request whose targets were tried in another order
+	// because of their context windows. What it said was not changed.
+	HandoffReordered HandoffAction = "reordered"
+	// HandoffTrimmed is a request whose answering target was sent a
+	// conversation fitted to its window.
+	HandoffTrimmed HandoffAction = "trimmed"
+)
+
 // UsageEvent is one request that resolved a route.
 type UsageEvent struct {
 	// ID is a UUID minted once by whoever records the event. WriteBatch stores
@@ -45,9 +57,10 @@ type UsageEvent struct {
 	LatencyMs        int
 	// TTFTMs is zero when no chunk arrived, and when the first one took under
 	// a millisecond.
-	TTFTMs    int
-	Cached    bool
-	CreatedAt time.Time
+	TTFTMs         int
+	Cached         bool
+	ContextHandoff HandoffAction
+	CreatedAt      time.Time
 }
 
 // UsageDay is one day's totals for a route, vendor and model.
@@ -80,6 +93,7 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		status, attempts                = make([]int32, n), make([]int32, n)
 		prompt, completion, latency, tt = make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
 		cached                          = make([]bool, n)
+		handoff                         = make([]*string, n)
 		created                         = make([]time.Time, n)
 	)
 	for i, e := range events {
@@ -89,6 +103,10 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		prompt[i], completion[i] = int64(e.PromptTokens), int64(e.CompletionTokens)
 		latency[i], tt[i] = int64(e.LatencyMs), int64(e.TTFTMs)
 		cached[i], created[i] = e.Cached, e.CreatedAt
+		if e.ContextHandoff != "" {
+			h := string(e.ContextHandoff)
+			handoff[i] = &h
+		}
 	}
 
 	// The rollup is built from the rows the insert returns, not from the
@@ -98,10 +116,11 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 	if _, err := s.pool.Exec(ctx,
 		`WITH stored AS (
 		     INSERT INTO usage_events (id, workspace_id, key_id, route_alias, vendor, model, status, outcome,
-		                               attempts, prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at)
+		                               attempts, prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at,
+		                               context_handoff)
 		     SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[], $7::int[],
 		                          $8::text[], $9::int[], $10::bigint[], $11::bigint[], $12::bigint[], $13::bigint[],
-		                          $14::boolean[], $15::timestamptz[])
+		                          $14::boolean[], $15::timestamptz[], $17::text[])
 		     ON CONFLICT (id) DO NOTHING
 		     RETURNING workspace_id, created_at, route_alias, vendor, model, outcome,
 		               prompt_tokens, completion_tokens, latency_ms, cached
@@ -124,7 +143,7 @@ func (s *Store) WriteBatch(ctx context.Context, events []UsageEvent) error {
 		     latency_ms_sum    = usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum,
 		     cache_hits        = usage_daily.cache_hits + EXCLUDED.cache_hits`,
 		ids, ws, keys, route, vendor, model, status, outcome, attempts, prompt, completion, latency, tt,
-		cached, created, notErrors); err != nil {
+		cached, created, notErrors, handoff); err != nil {
 		return fmt.Errorf("write usage batch: %w", err)
 	}
 	return nil
@@ -164,7 +183,8 @@ func (s *Store) Recent(ctx context.Context, workspaceID string, limit int) ([]Us
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT workspace_id, key_id, route_alias, vendor, model, status, outcome, attempts,
-		        prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at
+		        prompt_tokens, completion_tokens, latency_ms, ttft_ms, cached, created_at,
+		        coalesce(context_handoff, '')
 		   FROM usage_events
 		  WHERE workspace_id = $1
 		  ORDER BY created_at DESC, id DESC
@@ -175,7 +195,7 @@ func (s *Store) Recent(ctx context.Context, workspaceID string, limit int) ([]Us
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (UsageEvent, error) {
 		var e UsageEvent
 		err := row.Scan(&e.WorkspaceID, &e.KeyID, &e.RouteAlias, &e.Vendor, &e.Model, &e.Status, &e.Outcome,
-			&e.Attempts, &e.PromptTokens, &e.CompletionTokens, &e.LatencyMs, &e.TTFTMs, &e.Cached, &e.CreatedAt)
+			&e.Attempts, &e.PromptTokens, &e.CompletionTokens, &e.LatencyMs, &e.TTFTMs, &e.Cached, &e.CreatedAt, &e.ContextHandoff)
 		return e, err
 	})
 }

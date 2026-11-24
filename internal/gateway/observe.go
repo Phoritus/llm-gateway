@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/usage"
 )
@@ -37,7 +38,24 @@ var (
 		metric.WithUnit("s"), metric.WithDescription("Time from request to the first chunk from the upstream."))
 	fallbackAttempts, _ = meter.Int64Histogram("gateway.fallback.attempts",
 		metric.WithDescription("Targets called for one request."))
+	contextHandoff, _ = meter.Int64Counter("gateway.context_handoff",
+		metric.WithDescription("Requests context handoff changed, by action: reordered, trimmed or unfittable."))
 )
+
+const handoffUnfittable = "unfittable"
+
+func countHandoff(ctx context.Context, h router.Handoff) {
+	var actions []string
+	if a := h.Action(); a != "" {
+		actions = append(actions, string(a))
+	}
+	if h.Unfittable {
+		actions = append(actions, handoffUnfittable)
+	}
+	for _, a := range actions {
+		contextHandoff.Add(ctx, 1, metric.WithAttributes(attribute.String("action", a)))
+	}
+}
 
 // UsageRecorder takes an event without waiting. *usage.Recorder is the
 // production one.
@@ -60,6 +78,7 @@ type observation struct {
 	// cached is set when the exact cache answered. target is then the target
 	// that produced the stored answer, and no target was called.
 	cached     bool
+	handoff    router.Handoff
 	target     store.ResolvedTarget
 	firstChunk time.Time
 	// status is what the client was told, and outcome the fixed name of how
@@ -101,7 +120,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 		WorkspaceID: key.WorkspaceID, KeyID: key.ID, RouteAlias: o.alias,
 		Status: o.status, Outcome: outcome, Attempts: o.attempts,
 		LatencyMs: int(elapsed.Milliseconds()), TTFTMs: int(ttft.Milliseconds()),
-		Cached: o.cached, CreatedAt: o.start,
+		Cached: o.cached, ContextHandoff: o.handoff.Action(), CreatedAt: o.start,
 	}
 	if o.answered {
 		e.Vendor, e.Model = string(o.target.Vendor), o.target.Model

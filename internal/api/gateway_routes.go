@@ -28,14 +28,15 @@ type routeTargetView struct {
 }
 
 type routeView struct {
-	ID        string            `json:"id"`
-	Alias     string            `json:"alias"`
-	FreeFirst bool              `json:"free_first"`
-	Cache     store.CacheMode   `json:"cache"`
-	MaxHops   int               `json:"max_hops"`
-	Targets   []routeTargetView `json:"targets"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID             string            `json:"id"`
+	Alias          string            `json:"alias"`
+	FreeFirst      bool              `json:"free_first"`
+	Cache          store.CacheMode   `json:"cache"`
+	ContextHandoff store.HandoffMode `json:"context_handoff"`
+	MaxHops        int               `json:"max_hops"`
+	Targets        []routeTargetView `json:"targets"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 func routeViewOf(r store.Route) routeView {
@@ -47,8 +48,8 @@ func routeViewOf(r store.Route) routeView {
 			targets[i].FirstByteTimeoutSeconds = &s
 		}
 	}
-	return routeView{ID: r.ID, Alias: r.Alias, FreeFirst: r.FreeFirst, Cache: r.Cache, MaxHops: r.MaxHops,
-		Targets: targets, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+	return routeView{ID: r.ID, Alias: r.Alias, FreeFirst: r.FreeFirst, Cache: r.Cache, ContextHandoff: r.ContextHandoff,
+		MaxHops: r.MaxHops, Targets: targets, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 }
 
 func (d Deps) handleListRoutes(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +123,7 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 		Alias     string            `json:"alias"`
 		FreeFirst bool              `json:"free_first"`
 		Cache     *string           `json:"cache"`
+		Handoff   *string           `json:"context_handoff"`
 		MaxHops   *int              `json:"max_hops"`
 		Targets   []routeTargetView `json:"targets"`
 	}
@@ -138,6 +140,14 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 		var ok bool
 		if mode, ok = store.ParseCacheMode(*req.Cache); !ok {
 			invalidField(w, "cache", "cache must be auto, always or off.")
+			return store.RouteSpec{}, false
+		}
+	}
+	handoff := store.HandoffReorder
+	if req.Handoff != nil {
+		var ok bool
+		if handoff, ok = store.ParseHandoffMode(*req.Handoff); !ok {
+			invalidField(w, "context_handoff", "context_handoff must be off, reorder or trim.")
 			return store.RouteSpec{}, false
 		}
 	}
@@ -184,7 +194,8 @@ func decodeRouteSpec(w http.ResponseWriter, r *http.Request) (store.RouteSpec, b
 			targets[i].FirstByteTimeout = time.Duration(*s) * time.Second
 		}
 	}
-	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, Cache: mode, MaxHops: hops, Targets: targets}, true
+	return store.RouteSpec{Alias: req.Alias, FreeFirst: req.FreeFirst, Cache: mode, ContextHandoff: handoff,
+		MaxHops: hops, Targets: targets}, true
 }
 
 // aliasRule is validAlias in words, for the error that refuses one.

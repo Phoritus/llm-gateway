@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,5 +138,29 @@ func TestSlowStopsWhenTheContextIsCancelled(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Next did not return after the context was cancelled")
+	}
+}
+
+func TestWindowModelRefusesOnlyWhatDoesNotFit(t *testing.T) {
+	var p Provider
+	ask := func(chars int) error {
+		req := &provider.ChatRequest{Model: "mock/window-100", Messages: []provider.Message{
+			{Role: "user", Content: json.RawMessage(strconv.Quote(strings.Repeat("a", chars)))},
+		}}
+		s, err := p.ChatStream(context.Background(), req, provider.Credential{})
+		if s != nil {
+			_ = s.Close()
+		}
+		return err
+	}
+	if err := ask(400); err != nil {
+		t.Fatalf("100 tokens into a 100-token window: %v", err)
+	}
+	err := ask(404)
+	if !errors.Is(err, provider.ErrContextTooLong) {
+		t.Fatalf("101 tokens: err = %v, want context too long", err)
+	}
+	if w, r := provider.ContextLimit(err); w != 100 || r != 101 {
+		t.Errorf("stated window %d, requested %d; want 100, 101", w, r)
 	}
 }

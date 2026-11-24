@@ -55,6 +55,8 @@ func target(credential string, vendor provider.Vendor, model string) store.Resol
 	return store.ResolvedTarget{CredentialID: credential, Vendor: vendor, Model: model, Secret: "sk-" + credential}
 }
 
+var anyRequest = &provider.ChatRequest{Model: "alias", Messages: []provider.Message{{Role: "user", Content: []byte(`"hi"`)}}}
+
 func failure(kind error, retryAfter time.Duration) error {
 	return &provider.Error{Kind: kind, RetryAfter: retryAfter}
 }
@@ -70,8 +72,8 @@ func (s *fakeStream) Close() error                       { s.closed = true; retu
 func (h *harness) run(maxHops int, fail map[string]error, targets ...store.ResolvedTarget) (Result, []string, error) {
 	h.t.Helper()
 	var called []string
-	res, err := h.r.Run(context.Background(), &store.ResolvedRoute{ID: "r", MaxHops: maxHops, Targets: targets},
-		func(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	res, err := h.r.Run(context.Background(), &store.ResolvedRoute{ID: "r", MaxHops: maxHops, Targets: targets}, anyRequest,
+		func(_ context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 			called = append(called, t.CredentialID)
 			if err := fail[t.CredentialID]; err != nil {
 				return nil, nil, err
@@ -116,8 +118,8 @@ func TestTheFirstTargetThatAnswersWins(t *testing.T) {
 	failed := &fakeStream{}
 	a, b := target("a", provider.VendorGroq, "m1"), target("b", provider.VendorMistral, "m2")
 
-	res, err := h.r.Run(context.Background(), &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{a, b}},
-		func(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	res, err := h.r.Run(context.Background(), &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{a, b}}, anyRequest,
+		func(_ context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 			if t.CredentialID == "a" {
 				return failed, nil, failure(provider.ErrUpstream, 0)
 			}
@@ -378,7 +380,7 @@ func TestTheBudgetStopsNewAttemptsButNeverTheFirstRetry(t *testing.T) {
 			var called []string
 			_, err := h.r.Run(context.Background(), &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{
 				target("a", provider.VendorGroq, "m1"), target("b", provider.VendorMistral, "m1"), target("c", provider.VendorCerebras, "m1"),
-			}}, func(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+			}}, anyRequest, func(_ context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 				called = append(called, t.CredentialID)
 				h.clock.Advance(tc.takes)
 				return nil, nil, failure(provider.ErrInvalidRequest, 0)
@@ -399,7 +401,7 @@ func TestALongerFirstByteWaitExtendsTheBudgetByItsExtra(t *testing.T) {
 	var called []string
 	_, err := h.r.Run(context.Background(), &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{
 		thinker, target("b", provider.VendorMistral, "m1"), target("c", provider.VendorCerebras, "m1"),
-	}}, func(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	}}, anyRequest, func(_ context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 		called = append(called, t.CredentialID)
 		h.clock.Advance(takes[t.CredentialID])
 		return nil, nil, failure(provider.ErrInvalidRequest, 0)
@@ -441,8 +443,8 @@ func TestAnEndedContextStopsTheRunAndBlamesNoTarget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var called []string
 
-	res, err := h.r.Run(ctx, &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{a, b}},
-		func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	res, err := h.r.Run(ctx, &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{a, b}}, anyRequest,
+		func(ctx context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 			called = append(called, t.CredentialID)
 			cancel()
 			// An adapter may dress a cancellation up as its own failure.
@@ -576,14 +578,14 @@ func TestAClientHangUpIsNotCountedAsAnUpstreamError(t *testing.T) {
 	before := counted(t, "router.upstream.errors")
 	h := newHarness(t)
 	route := &store.ResolvedRoute{ID: "r", MaxHops: 3, Targets: []store.ResolvedTarget{target("c1", provider.VendorGroq, "m")}}
-	waitOut := func(ctx context.Context, _ store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	waitOut := func(ctx context.Context, _ store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 		<-ctx.Done()
 		return nil, nil, ctx.Err()
 	}
 
 	ctx, hangUp := context.WithCancel(context.Background())
 	hangUp()
-	if _, err := h.r.Run(ctx, route, waitOut); !errors.Is(err, context.Canceled) {
+	if _, err := h.r.Run(ctx, route, anyRequest, waitOut); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run = %v, want the cancellation", err)
 	}
 	if got := counted(t, "router.upstream.errors") - before; got != 0 {
@@ -593,7 +595,7 @@ func TestAClientHangUpIsNotCountedAsAnUpstreamError(t *testing.T) {
 	// The request's own deadline running out on a target still is one.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
-	if _, err := h.r.Run(ctx, route, waitOut); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := h.r.Run(ctx, route, anyRequest, waitOut); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run = %v, want the deadline", err)
 	}
 	if got := counted(t, "router.upstream.errors") - before; got != 1 {
@@ -602,7 +604,7 @@ func TestAClientHangUpIsNotCountedAsAnUpstreamError(t *testing.T) {
 }
 
 func TestBreakerOpenedCountsAnOpeningOnce(t *testing.T) {
-	alwaysFail := func(context.Context, store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	alwaysFail := func(context.Context, store.ResolvedTarget, *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 		return nil, nil, failure(provider.ErrUpstream, 0)
 	}
 
@@ -613,7 +615,7 @@ func TestBreakerOpenedCountsAnOpeningOnce(t *testing.T) {
 		for i := range 10 {
 			targets = append(targets, target(fmt.Sprintf("c%d", i), provider.VendorGroq, "m"))
 		}
-		_, _ = h.r.Run(context.Background(), &store.ResolvedRoute{ID: "r", MaxHops: 10, Targets: targets}, alwaysFail)
+		_, _ = h.r.Run(context.Background(), &store.ResolvedRoute{ID: "r", MaxHops: 10, Targets: targets}, anyRequest, alwaysFail)
 		h.r.Wait()
 		if got := counted(t, "router.breaker.opened") - before; got != 1 {
 			t.Errorf("ten failures in a row counted %d openings, want 1", got)
@@ -629,8 +631,8 @@ func TestBreakerOpenedCountsAnOpeningOnce(t *testing.T) {
 			done.Go(func() {
 				route := &store.ResolvedRoute{ID: "r", MaxHops: 3,
 					Targets: []store.ResolvedTarget{target(fmt.Sprintf("c%d", i), provider.VendorGroq, "m")}}
-				_, _ = h.r.Run(context.Background(), route,
-					func(context.Context, store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+				_, _ = h.r.Run(context.Background(), route, anyRequest,
+					func(context.Context, store.ResolvedTarget, *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 						arrived.Done()
 						arrived.Wait()
 						return nil, nil, failure(provider.ErrUpstream, 0)

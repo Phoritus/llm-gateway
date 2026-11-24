@@ -23,16 +23,15 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 06, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
+**Done:** 01 to 07, 11 (the VM, DNS, Cloudflare and `.env.prod`), and the
 compose stack with Caddy and `make deploy` from 10.
 
 **Next, for an agent, in this order:**
 
 1. **08 then 09.** The SSRF guard, then custom endpoints behind it.
-2. **07 Context handoff.**
-3. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
+2. **10 Finish the VM stack.** Memory limits and a deploy that does not cut
    requests.
-4. **12 Dashboards and alerts on Grafana Cloud.**
+3. **12 Dashboards and alerts on Grafana Cloud.**
 
 **Next, for the owner:**
 
@@ -40,6 +39,7 @@ compose stack with Caddy and `make deploy` from 10.
   arrives.
 - **R19:** free-tier provider keys, then `make live`.
 - **05:** turn it on: `SEMANTIC_CACHE=true` and `VECTOR_REDIS_URL=redis://redis:6379` in `deploy/.env.prod`, then calibrate the 0.95 thresholds on real traffic.
+- **07:** turn it on: `CONTEXT_HANDOFF=true` in `deploy/.env.prod`. Every route then reorders by window; a route set to `trim` also fits long conversations.
 - **13:** move the data from Neon to Azure Postgres, if Neon still holds any.
 
 Then **14, Gate B**. Tickets 15 to 18 come after it.
@@ -71,7 +71,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [05](issues/05-semantic-cache.md) | Semantic cache in the pipeline, vectors in the VM's Redis | task | `resolved` | 01, 03, 04 |
 | **Context handoff** | | | | |
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
-| [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
+| [07](issues/07-context-handoff.md) | Context handoff | task | `resolved` | 06 |
 | **Custom endpoints** | | | | |
 | [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `resolved` | - |
 | [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `ready-for-agent` | 08 |
@@ -155,6 +155,16 @@ point), `grilling` needs the user's decisions before anything is built,
 - Ticket 19 (members and invites): cut by the owner to keep to the core.
   Workspaces stay single-member and there are no roles.
 
+- Ticket 07 (context handoff): the router owns it, because the windows it
+  learns are shared state read in the same MGET as the skips, and it is the
+  only place that knows which call is a retry. `internal/handoff` is the pure
+  half (`Fit`, `Budget`, the catalogue). The catalogue is a file embedded
+  at build time by `make windows`, not a table: learned windows win, and
+  the upstreams' windows change far less often than their free quotas.
+  Fitting never refuses a target on its own: one whose window cannot hold
+  the pinned messages is sent the request as it came, since the window may
+  be the catalogue's guess, and its error decides.
+
 ## Fog
 
 - The Anthropic-native endpoint: the spec says "later", after Phase 2.
@@ -162,5 +172,8 @@ point), `grilling` needs the user's decisions before anything is built,
   own repo (R24 is wontfix here). Until it serves `/reset-password`, the
   mailed reset link answers 404.
 - `GET /v1/models/{id}` (from R23), when a client is found that needs it.
+- A window learned from an error is only ever lowered or replaced by another
+  error, never raised by a success, so a small one learned on a free tier
+  keeps trimming for its 7 days (from ticket 07's review).
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`
   stops re-deriving the burst clamp (from R23's review).

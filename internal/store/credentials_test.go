@@ -216,7 +216,7 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, FreeFirst: true, Cache: CacheAlways, Targets: []RouteTarget{
+	if _, err := st.CreateRoute(ctx, ws, RouteSpec{Alias: "chat", MaxHops: 3, FreeFirst: true, Cache: CacheAlways, ContextHandoff: HandoffReorder, Targets: []RouteTarget{
 		{CredentialID: second.ID, Model: "echo", FirstByteTimeout: 2 * time.Minute},
 		{CredentialID: first.ID, Model: "llama-3"},
 	}}); err != nil {

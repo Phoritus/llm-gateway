@@ -145,7 +145,7 @@ func TestStoresTakeNothingAsNothing(t *testing.T) {
 	})
 }
 
-func answering(_ context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+func answering(_ context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 	return &fakeStream{}, &provider.ChatChunk{ID: t.CredentialID}, nil
 }
 
@@ -159,19 +159,19 @@ func TestAFailureOnOneInstanceIsSkippedOnAnother(t *testing.T) {
 			limited, target("cred:2", provider.VendorMistral, "m"),
 		}}
 
-		_, err := first.Run(context.Background(), route,
-			func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+		_, err := first.Run(context.Background(), route, anyRequest,
+			func(ctx context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 				if t == limited {
 					return nil, nil, failure(provider.ErrRateLimited, 0)
 				}
-				return answering(ctx, t)
+				return answering(ctx, t, nil)
 			})
 		if err != nil {
 			t.Fatal(err)
 		}
 		first.Wait()
 
-		res, err := second.Run(context.Background(), route, answering)
+		res, err := second.Run(context.Background(), route, anyRequest, answering)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,12 +210,12 @@ func TestRoutingCarriesOnInProcessWhenTheSharedStoreIsDown(t *testing.T) {
 	limited := target("a", provider.VendorGroq, "m1")
 	route := &store.ResolvedRoute{MaxHops: 3, Targets: []store.ResolvedTarget{limited, target("b", provider.VendorMistral, "m1")}}
 
-	res, err := r.Run(context.Background(), route,
-		func(ctx context.Context, t store.ResolvedTarget) (provider.Stream, *provider.ChatChunk, error) {
+	res, err := r.Run(context.Background(), route, anyRequest,
+		func(ctx context.Context, t store.ResolvedTarget, _ *provider.ChatRequest) (provider.Stream, *provider.ChatChunk, error) {
 			if t == limited {
 				return nil, nil, failure(provider.ErrRateLimited, 0)
 			}
-			return answering(ctx, t)
+			return answering(ctx, t, nil)
 		})
 	if err != nil {
 		t.Fatalf("a store outage failed the request: %v", err)
@@ -226,7 +226,7 @@ func TestRoutingCarriesOnInProcessWhenTheSharedStoreIsDown(t *testing.T) {
 	// Past the in-process copy's second, so the skip is read back from the
 	// fallback rather than from the copy.
 	time.Sleep(copyTTL + 100*time.Millisecond)
-	res, err = r.Run(context.Background(), route, answering)
+	res, err = r.Run(context.Background(), route, anyRequest, answering)
 	if err != nil {
 		t.Fatal(err)
 	}

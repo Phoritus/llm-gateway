@@ -253,7 +253,7 @@ func TestUpstreamFailuresBeforeTheFirstByteAreStatuses(t *testing.T) {
 		code   string
 	}{
 		{"mock/rate-limited", http.StatusTooManyRequests, "upstream_rate_limited"},
-		{"mock/context-too-long", http.StatusRequestEntityTooLarge, "context_length_exceeded"},
+		{"mock/context-too-long", http.StatusBadRequest, "context_length_exceeded"},
 		{"mock/fail", http.StatusBadGateway, "upstream_error"},
 	}
 	srv := newServer(t, &mock.Provider{}, time.Minute)

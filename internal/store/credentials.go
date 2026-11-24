@@ -193,10 +193,11 @@ func (c *Credentials) Unseal(ctx context.Context, workspaceID, id string) (Unsea
 // ResolvedRoute is a route as /v1 calls it: its chain in order, each target
 // carrying the opened key it authenticates upstream with.
 type ResolvedRoute struct {
-	ID        string
-	MaxHops   int
-	FreeFirst bool
-	Cache     CacheMode
+	ID             string
+	MaxHops        int
+	FreeFirst      bool
+	Cache          CacheMode
+	ContextHandoff HandoffMode
 	// Version changes whenever the route is written. The exact cache keys on
 	// it, so an answer from the chain as it was is not served for the chain
 	// as it is.
@@ -223,7 +224,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 		return nil, ErrNotFound
 	}
 	rows, err := c.store.pool.Query(ctx,
-		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.updated_at, w.settings, c.id, c.provider, t.model, t.first_byte_timeout_seconds, c.key_id, c.ciphertext
+		`SELECT r.id, r.max_hops, r.free_first, r.cache, r.context_handoff, r.updated_at, w.settings, c.id, c.provider, t.model, t.first_byte_timeout_seconds, c.key_id, c.ciphertext
 		   FROM routes r
 		   JOIN workspaces w ON w.id = r.workspace_id
 		   JOIN route_targets t ON t.route_id = r.id AND t.workspace_id = r.workspace_id
@@ -244,7 +245,7 @@ func (c *Credentials) ResolveRoute(ctx context.Context, workspaceID, alias strin
 			updated time.Time
 			raw     []byte
 		)
-		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &updated, &raw, &sealed.id, &sealed.vendor, &model, &wait, &sealed.keyID, &sealed.blob); err != nil {
+		if err := rows.Scan(&route.ID, &route.MaxHops, &route.FreeFirst, &route.Cache, &route.ContextHandoff, &updated, &raw, &sealed.id, &sealed.vendor, &model, &wait, &sealed.keyID, &sealed.blob); err != nil {
 			return nil, fmt.Errorf("scan route target: %w", err)
 		}
 		route.Version = updated.UnixNano()

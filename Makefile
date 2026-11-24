@@ -46,6 +46,10 @@ dev: deps-up run ## Start the dependencies, then the service
 build: ## Compile the service to bin/gateway
 	$(GO) build -o $(BIN) ./cmd/gateway
 
+.PHONY: windows
+windows: ## Rebuild the context window catalogue from OpenRouter's and LiteLLM's data
+	@scripts/windows.sh
+
 # --- Dependencies ------------------------------------------------------------
 
 .PHONY: deps-up

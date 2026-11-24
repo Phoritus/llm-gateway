@@ -29,18 +29,19 @@ type usageDayView struct {
 }
 
 type usageEventView struct {
-	CreatedAt        time.Time     `json:"created_at"`
-	Route            string        `json:"route"`
-	Vendor           string        `json:"vendor"`
-	Model            string        `json:"model"`
-	Status           int           `json:"status"`
-	Outcome          store.Outcome `json:"outcome"`
-	Attempts         int           `json:"attempts"`
-	PromptTokens     int           `json:"prompt_tokens"`
-	CompletionTokens int           `json:"completion_tokens"`
-	LatencyMs        int           `json:"latency_ms"`
-	TTFTMs           int           `json:"ttft_ms"`
-	Cached           bool          `json:"cached"`
+	CreatedAt        time.Time            `json:"created_at"`
+	Route            string               `json:"route"`
+	Vendor           string               `json:"vendor"`
+	Model            string               `json:"model"`
+	Status           int                  `json:"status"`
+	Outcome          store.Outcome        `json:"outcome"`
+	Attempts         int                  `json:"attempts"`
+	PromptTokens     int                  `json:"prompt_tokens"`
+	CompletionTokens int                  `json:"completion_tokens"`
+	LatencyMs        int                  `json:"latency_ms"`
+	TTFTMs           int                  `json:"ttft_ms"`
+	Cached           bool                 `json:"cached"`
+	ContextHandoff   *store.HandoffAction `json:"context_handoff"`
 }
 
 // handleUsage is GET /api/usage: the daily rollup for a range of UTC days, and
@@ -84,6 +85,9 @@ func (d Deps) handleUsage(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: e.CreatedAt, Route: e.RouteAlias, Vendor: e.Vendor, Model: e.Model, Status: e.Status,
 			Outcome: e.Outcome, Attempts: e.Attempts, PromptTokens: e.PromptTokens,
 			CompletionTokens: e.CompletionTokens, LatencyMs: e.LatencyMs, TTFTMs: e.TTFTMs, Cached: e.Cached,
+		}
+		if e.ContextHandoff != "" {
+			eventViews[i].ContextHandoff = &e.ContextHandoff
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"days": dayViews, "recent": eventViews})

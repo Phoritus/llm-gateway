@@ -333,7 +333,7 @@ func classify(status int, parsed errorFields, detail string) *provider.Error {
 	kind := func(k error) *provider.Error { return &provider.Error{Kind: k, Detail: detail} }
 	switch {
 	case aboutContextLength(code, parsed.Type, parsed.Message):
-		return kind(provider.ErrContextTooLong)
+		return provider.ContextTooLong(parsed.Message, detail)
 	case code == "insufficient_quota" || parsed.Type == "insufficient_quota":
 		return kind(provider.ErrQuota)
 	case parsed.badGoogleKey():
@@ -351,7 +351,7 @@ func classify(status int, parsed errorFields, detail string) *provider.Error {
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
 		return kind(provider.ErrTimeout)
 	case http.StatusRequestEntityTooLarge:
-		return kind(provider.ErrContextTooLong)
+		return provider.ContextTooLong(parsed.Message, detail)
 	case http.StatusTooManyRequests:
 		return kind(provider.ErrRateLimited)
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
