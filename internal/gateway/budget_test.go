@@ -137,7 +137,7 @@ func TestASpentBlockingBudgetRefusesBeforeAnyUpstreamCall(t *testing.T) {
 		t.Errorf("the upstream was called %d times, want none", n)
 	}
 	e := recordedEvents(t, f.usage, 1)[0]
-	if e.Status != http.StatusTooManyRequests || e.Outcome != outcomeBudgetExceeded || e.CostMicroUSD == nil || *e.CostMicroUSD != 0 {
+	if e.Status != http.StatusTooManyRequests || e.Outcome != store.OutcomeBudgetExceeded || e.CostMicroUSD == nil || *e.CostMicroUSD != 0 {
 		t.Errorf("event = %+v, want a refused request that cost nothing", e)
 	}
 }

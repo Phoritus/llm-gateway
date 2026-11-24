@@ -48,11 +48,13 @@ func TestWriteBatchRollsUpWhatItStored(t *testing.T) {
 	noon := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	failed := func(e *UsageEvent) { e.Status, e.Outcome = 502, "upstream_error" }
 	hungUp := func(e *UsageEvent) { e.Status, e.Outcome = 499, OutcomeClientGone }
+	overBudget := func(e *UsageEvent) { e.Status, e.Outcome = 429, OutcomeBudgetExceeded }
 
 	writeUsage(t, st,
 		usageEvent(ws, "chat", noon),
 		usageEvent(ws, "chat", noon.Add(time.Minute), failed),
 		usageEvent(ws, "chat", noon.Add(2*time.Minute), hungUp),
+		usageEvent(ws, "chat", noon.Add(3*time.Minute), overBudget),
 		usageEvent(ws, "chat", noon.Add(12*time.Hour)), // the next UTC day
 		usageEvent(ws, "other", noon),
 	)
@@ -65,8 +67,8 @@ func TestWriteBatchRollsUpWhatItStored(t *testing.T) {
 	if !d.Day.Equal(time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("day = %s", d.Day)
 	}
-	if d.Requests != 3 || d.Errors != 1 || d.PromptTokens != 30 || d.CompletionTokens != 15 || d.LatencyMsSum != 300 {
-		t.Errorf("rollup = %+v, want 3 requests, 1 error (a client hanging up is not one), 30/15 tokens, 300ms", d)
+	if d.Requests != 4 || d.Errors != 1 || d.PromptTokens != 40 || d.CompletionTokens != 20 || d.LatencyMsSum != 400 {
+		t.Errorf("rollup = %+v, want 4 requests, 1 error (neither a client hanging up nor a spent budget is one), 40/20 tokens, 400ms", d)
 	}
 	if days[1].Requests != 1 {
 		t.Errorf("next day = %+v", days[1])
@@ -74,8 +76,8 @@ func TestWriteBatchRollsUpWhatItStored(t *testing.T) {
 	if all := dailyOf(t, st, ws, ""); len(all) != 3 {
 		t.Errorf("no route filter returned %d rows, want 3", len(all))
 	}
-	if n := count(t, st, "usage_events"); n != 5 {
-		t.Errorf("stored %d raw events, want 5", n)
+	if n := count(t, st, "usage_events"); n != 6 {
+		t.Errorf("stored %d raw events, want 6", n)
 	}
 }
 

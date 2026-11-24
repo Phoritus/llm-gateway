@@ -142,7 +142,7 @@
             "uid": "${datasource}"
           },
           "refId": "A",
-          "expr": "sum(rate(gateway_requests_total{outcome=~\"upstream_error|timeout|unavailable|stream_error\"}[5m])) / clamp_min(sum(rate(gateway_requests_total{outcome!=\"refused\"}[5m])), 1e-9)",
+          "expr": "sum(rate(gateway_requests_total{outcome=~\"upstream_error|timeout|unavailable|stream_error\"}[5m])) / clamp_min(sum(rate(gateway_requests_total{outcome!~\"refused|budget_exceeded\"}[5m])), 1e-9)",
           "legendFormat": ""
         }
       ]

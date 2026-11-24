@@ -23,8 +23,6 @@ type Budget interface {
 const (
 	headerCostBasis       = "X-Budget-Cost-Basis"
 	typeInsufficientQuota = "insufficient_quota"
-	// outcomeBudgetExceeded is a request a spent blocking budget refused.
-	outcomeBudgetExceeded store.Outcome = "budget_exceeded"
 )
 
 func budgetAccounts(key store.ActiveGatewayKey, route *store.ResolvedRoute) []budget.Account {

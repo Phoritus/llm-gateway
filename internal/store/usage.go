@@ -17,11 +17,14 @@ const (
 	OutcomeOK          Outcome = "ok"
 	OutcomeStreamError Outcome = "stream_error"
 	OutcomeClientGone  Outcome = "client_gone"
+	// OutcomeBudgetExceeded is a request a spent blocking budget refused.
+	OutcomeBudgetExceeded Outcome = "budget_exceeded"
 )
 
 // notErrors are the outcomes the rollup leaves out of its error count. A
-// client that hung up is not the service failing.
-var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone)}
+// client that hung up is not the service failing, nor is a budget the
+// workspace set doing what it was set to do.
+var notErrors = []string{string(OutcomeOK), string(OutcomeClientGone), string(OutcomeBudgetExceeded)}
 
 // HandoffAction is what context handoff did to a request. Empty is nothing.
 type HandoffAction string

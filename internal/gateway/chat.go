@@ -128,7 +128,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			if cached.missed {
 				countCache(cacheMiss)
 			}
-			obs.status, obs.outcome = http.StatusTooManyRequests, outcomeBudgetExceeded
+			obs.status, obs.outcome = http.StatusTooManyRequests, store.OutcomeBudgetExceeded
 			return
 		}
 		route.Targets = targets
