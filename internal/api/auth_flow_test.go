@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,10 @@ func TestSignupToLogoutFlow(t *testing.T) {
 
 	const email = "owner@example.com"
 	token := env.signup(c, email)
+
+	if body, want := env.mailer.last(t).Body, env.server.URL+"/verify-email?token="; !strings.Contains(body, want) {
+		t.Fatalf("verification mail does not link %s...:\n%s", want, body)
+	}
 
 	// Before verification the account exists but is unverified, and /api/me
 	// is unreachable without a session.

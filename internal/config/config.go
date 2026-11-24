@@ -144,7 +144,7 @@ func Load() (*Config, error) {
 		Env:           Environment(strings.ToLower(envOr("APP_ENV", string(EnvDevelopment)))),
 		CookieDomain:  os.Getenv("COOKIE_DOMAIN"),
 		MailFrom:      envOr("MAIL_FROM", "no-reply@localhost"),
-		PublicBaseURL: strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:8080"), "/"),
+		PublicBaseURL: strings.TrimRight(envOr("PUBLIC_BASE_URL", "http://localhost:3000"), "/"),
 		SMTPURL:       strings.TrimSpace(os.Getenv("SMTP_URL")),
 		OTLPEndpoint:  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
