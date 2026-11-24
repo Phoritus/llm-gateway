@@ -66,6 +66,7 @@ Day to day:
 | `make deps-up` / `deps-down` | Start or stop Postgres and Redis, waiting for health |
 | `make deps-reset` | Stop them and drop the volumes |
 | `make psql` / `make redis-cli` | A shell on either dependency |
+| `make grafana` | Apply `deploy/grafana` (the LLM Gateway dashboard and its 7 alert rules) to `GRAFANA_URL` with `GRAFANA_TOKEN`, or to the local Grafana. Idempotent; edit the JSON and run it again. The alerts' Prometheus is found by uid (`grafanacloud-prom`, `prometheus`) or named by `GRAFANA_PROM_UID` |
 | `make obs-up` / `obs-down` / `obs-status` | Start, stop or show the local Grafana stack (`grafana/otel-lgtm`, Grafana on `127.0.0.1:3000`, admin/admin). Opt-in: `deps-up` never starts it, and `deps-down` does not stop it |
 | `make check` | `fmt-check`, `vet`, `build`, unit tests — must pass before a commit |
 | `make test` | Unit tests; the ones needing a database skip |

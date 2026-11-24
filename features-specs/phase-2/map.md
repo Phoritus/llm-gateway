@@ -23,11 +23,12 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 11.
+**Done:** 01 to 12.
 
 **Next, for an agent, in this order:**
 
-1. **12 Dashboards and alerts on Grafana Cloud.**
+1. **15 to 18**, which need nothing from the owner: master key rotation,
+   the provider key health check, opt-in prompt logging, budgets.
 
 **Next, for the owner:**
 
@@ -35,6 +36,9 @@ because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
   arrives.
 - **R19:** free-tier provider keys, then `make live`.
 - **05:** turn it on: `SEMANTIC_CACHE=true` and `VECTOR_REDIS_URL=redis://redis:6379` in `deploy/.env.prod`, then calibrate the 0.95 thresholds on real traffic.
+- **12:** in Grafana Cloud, create a service account token (Editor, plus
+  alert rule write), put `GRAFANA_URL` and `GRAFANA_TOKEN` in `.env.dev`,
+  run `make grafana`, and set your email on the default contact point.
 - **10:** check the VM has 2 GiB of memory (the stack takes up to 832 MiB
   and the image builds on the VM), then `make deploy`. The first deploy
   moves to two gateways and may drop one request as Caddy reloads.
@@ -77,7 +81,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | **The VM and observability** | | | | |
 | [10](issues/10-vps-stack.md) | Finish the VM stack: memory limits, a deploy that does not cut requests | task | `resolved` | - |
 | [11](issues/11-provision-vps.md) | Provision the VM, DNS and secrets | task | `resolved` | - |
-| [12](issues/12-prometheus-grafana.md) | Dashboards and alerts on Grafana Cloud | task | `ready-for-agent` | - |
+| [12](issues/12-prometheus-grafana.md) | Dashboards and alerts on Grafana Cloud | task | `resolved` | - |
 | [13](issues/13-cutover.md) | Move Postgres from Neon to Azure | task | `ready-for-human` | - |
 | **Gate B** | | | | |
 | [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 10, 12, 13, R16 |

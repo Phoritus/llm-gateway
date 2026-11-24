@@ -190,7 +190,7 @@ def main() -> int:
     check("upstream failure -> 502", raises(openai.InternalServerError, 502, "upstream_error", model="compat-fail"))
     check("rate limited -> RateLimitError", raises(openai.RateLimitError, 429, "upstream_rate_limited", model="compat-rate-limited"))
     check("rate limited carries Retry-After", rate_limited_retry_after)
-    check("context too long -> 413", raises(openai.APIStatusError, 413, "context_length_exceeded", model="compat-context-too-long"))
+    check("context too long -> BadRequestError 400", raises(openai.BadRequestError, 400, "context_length_exceeded", model="compat-context-too-long"))
     check("bad key -> AuthenticationError", raises(openai.AuthenticationError, 401, "invalid_api_key", using=bad_client, model="compat-echo"))
     check("failure before first chunk is a status, streaming", streaming_error_before_first_chunk)
     check("failure after first chunk raises APIError", error_after_first_chunk_raises)

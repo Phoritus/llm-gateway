@@ -82,6 +82,10 @@ redis-cli: ## Open a redis-cli shell
 obs-up: ## Start Grafana, Prometheus, Tempo and Loki and wait for Grafana
 	@scripts/obs.sh up
 
+.PHONY: grafana
+grafana: ## Apply the dashboard and alerts in deploy/grafana to GRAFANA_URL (local by default)
+	@scripts/grafana.sh
+
 .PHONY: obs-down
 obs-down: ## Stop the observability stack
 	@scripts/obs.sh down
