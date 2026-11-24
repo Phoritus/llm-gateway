@@ -23,12 +23,12 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 12.
+**Done:** 01 to 12, 15 and 16.
 
 **Next, for an agent, in this order:**
 
-1. **16 to 18**, which need nothing from the owner: the provider key health
-   check, opt-in prompt logging, budgets.
+1. **17 and 18**, which need nothing from the owner: opt-in prompt logging,
+   budgets.
 
 **Next, for the owner:**
 
@@ -87,7 +87,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 10, 12, 13, R16 |
 | **After Gate B** | | | | |
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `resolved` | - |
-| [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `ready-for-agent` | - |
+| [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `resolved` | - |
 | [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `ready-for-agent` | 04 |
 | [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `ready-for-agent` | 04 |
 | [19](issues/19-members-and-invites.md) | ~~Workspace members, invites and the role column~~ (cut) | grilling | `wontfix` | - |
@@ -167,6 +167,12 @@ point), `grilling` needs the user's decisions before anything is built,
   Fitting never refuses a target on its own: one whose window cannot hold
   the pinned messages is sent the request as it came, since the window may
   be the catalogue's guess, and its error decides.
+
+- Ticket 16 (key health): a due time per credential, claimed with
+  `SKIP LOCKED` and pushed a day ahead in the same statement, rather than
+  checking every credential at a fixed hour. Instances share the work with
+  no lock or leader, and the load spreads by when each key was added. The
+  checker never touches the router's skip state.
 
 ## Fog
 

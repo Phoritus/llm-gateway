@@ -34,7 +34,25 @@ type Credential struct {
 	Last4       string
 	BaseURL     string
 	CreatedAt   time.Time
+	LastCheck   *KeyCheck
 }
+
+type KeyCheck struct {
+	Result KeyCheckResult
+	At     time.Time
+}
+
+type KeyCheckResult string
+
+const (
+	KeyCheckOK                  KeyCheckResult = "ok"
+	KeyCheckRejected            KeyCheckResult = "key_rejected"
+	KeyCheckQuotaExhausted      KeyCheckResult = "quota_exhausted"
+	KeyCheckRateLimited         KeyCheckResult = "rate_limited"
+	KeyCheckProviderTimeout     KeyCheckResult = "provider_timeout"
+	KeyCheckProviderError       KeyCheckResult = "provider_error"
+	KeyCheckProviderUnavailable KeyCheckResult = "provider_unavailable"
+)
 
 type NewCredential struct {
 	Provider provider.Vendor
@@ -120,7 +138,7 @@ func (c *Credentials) Create(ctx context.Context, workspaceID string, in NewCred
 // List returns the workspace's credentials, newest first.
 func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credential, error) {
 	rows, err := c.store.pool.Query(ctx,
-		`SELECT id, workspace_id, provider, name, last4, coalesce(base_url, ''), created_at
+		`SELECT id, workspace_id, provider, name, last4, coalesce(base_url, ''), created_at, check_result, checked_at
 		   FROM provider_credentials
 		  WHERE workspace_id = $1
 		  ORDER BY created_at DESC, id`, workspaceID)
@@ -131,9 +149,17 @@ func (c *Credentials) List(ctx context.Context, workspaceID string) ([]Credentia
 
 	var out []Credential
 	for rows.Next() {
-		var cred Credential
-		if err := rows.Scan(&cred.ID, &cred.WorkspaceID, &cred.Provider, &cred.Name, &cred.Last4, &cred.BaseURL, &cred.CreatedAt); err != nil {
+		var (
+			cred      Credential
+			result    *string
+			checkedAt *time.Time
+		)
+		if err := rows.Scan(&cred.ID, &cred.WorkspaceID, &cred.Provider, &cred.Name, &cred.Last4, &cred.BaseURL, &cred.CreatedAt,
+			&result, &checkedAt); err != nil {
 			return nil, fmt.Errorf("scan provider credential: %w", err)
+		}
+		if result != nil && checkedAt != nil {
+			cred.LastCheck = &KeyCheck{Result: KeyCheckResult(*result), At: *checkedAt}
 		}
 		out = append(out, cred)
 	}
@@ -397,4 +423,38 @@ func (c *Credentials) KeyUsage(ctx context.Context) (map[crypto.KeyID]int, error
 		usage[crypto.KeyID(id)] = n
 	}
 	return usage, rows.Err()
+}
+
+type DueCheck struct {
+	WorkspaceID string
+	ID          string
+}
+
+func (c *Credentials) ClaimDueChecks(ctx context.Context, interval time.Duration, limit int) ([]DueCheck, error) {
+	rows, err := c.store.pool.Query(ctx,
+		`UPDATE provider_credentials SET check_due_at = now() + $1 * interval '1 second'
+		  WHERE id IN (SELECT id FROM provider_credentials WHERE check_due_at <= now()
+		                ORDER BY check_due_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+		 RETURNING workspace_id, id`, int64(interval/time.Second), limit)
+	if err != nil {
+		return nil, fmt.Errorf("claim due key checks: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[DueCheck])
+}
+
+func (c *Credentials) RecordCheck(ctx context.Context, workspaceID, id string, check KeyCheck) error {
+	id, err := parseID(id)
+	if err != nil {
+		return err
+	}
+	tag, err := c.store.pool.Exec(ctx,
+		`UPDATE provider_credentials SET check_result = $3, checked_at = $4 WHERE workspace_id = $1 AND id = $2`,
+		workspaceID, id, string(check.Result), check.At)
+	if err != nil {
+		return fmt.Errorf("record key check: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
