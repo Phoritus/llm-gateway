@@ -51,6 +51,9 @@ type Deps struct {
 	// Quota puts a free-first route's targets with free quota left first.
 	// Nil leaves every route in its own order.
 	Quota FreeQuota
+	// Budget enforces and counts the workspaces' and keys' monthly budgets.
+	// Nil turns budgets off: nothing is refused, priced or counted.
+	Budget Budget
 	// ContextHandoff applies each route's context_handoff setting. Off, every
 	// route is routed as if set to off: the CONTEXT_HANDOFF switch.
 	ContextHandoff bool

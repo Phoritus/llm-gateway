@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"llm-gateway/internal/budget"
 	"llm-gateway/internal/promptlog"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
@@ -101,6 +102,10 @@ type observation struct {
 	prompt  []byte
 	answer  *assembled
 	failure error
+	// budgets are the accounts the request is charged to, and estimate its
+	// prompt's estimated tokens, priced when the upstream reports no usage.
+	budgets  []budget.Account
+	estimate float64
 }
 
 // response is what the client was sent, with an answer's text cut to what a
@@ -198,6 +203,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 	if cost.usage != nil {
 		e.PromptTokens, e.CompletionTokens = cost.usage.PromptTokens, cost.usage.CompletionTokens
 	}
+	e.CostMicroUSD = d.chargeBudgets(o, key, cost)
 	d.Usage.Record(e)
 	if o.prompt != nil && d.PromptLog != nil {
 		// Off the handler: net/http finishes the response only when it
