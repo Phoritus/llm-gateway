@@ -73,7 +73,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | [06](issues/06-context-handoff-design.md) | Context handoff: what it is | grilling | `resolved` | - |
 | [07](issues/07-context-handoff.md) | Context handoff | task | `ready-for-agent` | 06 |
 | **Custom endpoints** | | | | |
-| [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `ready-for-agent` | - |
+| [08](issues/08-ssrf-guard.md) | SSRF-guarded HTTP client | task | `resolved` | - |
 | [09](issues/09-custom-endpoints.md) | Custom OpenAI-compatible endpoints | task | `ready-for-agent` | 08 |
 | **The VM and observability** | | | | |
 | [10](issues/10-vps-stack.md) | Finish the VM stack: memory limits, a deploy that does not cut requests | task | `ready-for-agent` | - |
