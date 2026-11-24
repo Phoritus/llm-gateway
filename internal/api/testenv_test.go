@@ -28,6 +28,7 @@ import (
 	"llm-gateway/internal/config"
 	"llm-gateway/internal/crypto"
 	"llm-gateway/internal/gateway"
+	"llm-gateway/internal/promptlog"
 	"llm-gateway/internal/provider"
 	"llm-gateway/internal/provider/mock"
 	"llm-gateway/internal/ratelimit"
@@ -208,6 +209,13 @@ func newTestEnv(t *testing.T) *testEnv {
 		defer closeCancel()
 		usageRecorder.Close(closeCtx)
 	})
+	promptLog := promptlog.NewRecorder(st, deps.Logger)
+	go promptLog.Run(context.Background())
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		promptLog.Close(closeCtx)
+	})
 
 	mux := http.NewServeMux()
 	Health(deps.Logger, nil,
@@ -221,9 +229,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		Aliases:   st,
 		Providers: deps.Providers,
 		// In memory, so one test's failing targets are not skipped in the next.
-		Router:  router.New(router.NewMemory(), deps.Logger),
-		Usage:   usageRecorder,
-		Timeout: time.Minute,
+		Router:    router.New(router.NewMemory(), deps.Logger),
+		Usage:     usageRecorder,
+		PromptLog: promptLog,
+		Timeout:   time.Minute,
 		// Its keys carry the workspace's id, which is new in every test, so
 		// nothing has to be deleted between them.
 		Cache:   cache.NewExact(rdb, time.Minute),

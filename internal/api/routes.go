@@ -124,6 +124,9 @@ func Routes(d Deps) http.Handler {
 
 			r.Get("/usage", d.handleUsage)
 
+			r.Get("/logs", d.handleListLogs)
+			r.Delete("/logs", d.handleDeleteLogs)
+
 			r.Get("/workspace/settings", d.handleGetWorkspaceSettings)
 			r.Put("/workspace/settings", d.handlePutWorkspaceSettings)
 		})

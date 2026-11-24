@@ -23,12 +23,11 @@ stay on Grafana Cloud. There is no Prometheus and no self-hosted Postgres to
 run. The VM's own `redis:8-alpine` holds only the semantic cache's vectors,
 because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
-**Done:** 01 to 12, 15 and 16.
+**Done:** 01 to 12, 15 to 17.
 
 **Next, for an agent, in this order:**
 
-1. **17 and 18**, which need nothing from the owner: opt-in prompt logging,
-   budgets.
+1. **18**, which needs nothing from the owner: budgets.
 
 **Next, for the owner:**
 
@@ -88,7 +87,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | **After Gate B** | | | | |
 | [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `resolved` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `resolved` | - |
-| [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `ready-for-agent` | 04 |
+| [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `resolved` | 04 |
 | [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `ready-for-agent` | 04 |
 | [19](issues/19-members-and-invites.md) | ~~Workspace members, invites and the role column~~ (cut) | grilling | `wontfix` | - |
 
@@ -173,6 +172,10 @@ point), `grilling` needs the user's decisions before anything is built,
   checking every credential at a fixed hour. Instances share the work with
   no lock or leader, and the load spreads by when each key was added. The
   checker never touches the router's skip state.
+- Ticket 17 (prompt logging): turning logging off keeps stored logs until
+  their retention runs out, so an accidental toggle loses nothing, and
+  `DELETE /api/logs` removes them at once. Logs get their own small queue,
+  sharing usage's code through `batch.Queue[T]` but not its 10000 slots.
 
 ## Fog
 

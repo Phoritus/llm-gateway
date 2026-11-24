@@ -1,13 +1,21 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"slices"
 	"time"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"llm-gateway/internal/promptlog"
+	"llm-gateway/internal/provider"
 	"llm-gateway/internal/router"
 	"llm-gateway/internal/store"
 	"llm-gateway/internal/usage"
@@ -63,6 +71,11 @@ type UsageRecorder interface {
 	Record(usage.Event)
 }
 
+// PromptLogger takes a prompt log without waiting.
+type PromptLogger interface {
+	Record(store.RequestLog)
+}
+
 // observation is what one request amounts to for usage history and metrics,
 // filled in by the handler as it goes and read once, when it ends.
 type observation struct {
@@ -85,6 +98,63 @@ type observation struct {
 	// the request ended.
 	status  int
 	outcome store.Outcome
+	prompt  []byte
+	answer  *assembled
+	failure error
+}
+
+// response is what the client was sent, with an answer's text cut to what a
+// log keeps before it is encoded, and whether it was cut.
+func (o *observation) response() ([]byte, bool) {
+	var (
+		body any
+		cut  bool
+	)
+	switch {
+	case o.answer != nil && o.status == http.StatusOK:
+		body, cut = capAnswer(o.answer.answer.Response(), promptlog.MaxBodyBytes)
+	case o.failure != nil && o.status != statusClientClosed:
+		_, detail, _ := upstreamError(o.failure)
+		body = errorBody{Error: detail}
+	default:
+		return nil, false
+	}
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(body)
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), cut
+}
+
+// capAnswer cuts the answer's text so that, all together, it holds at most
+// budget bytes.
+func capAnswer(r *provider.ChatResponse, budget int) (*provider.ChatResponse, bool) {
+	out := *r
+	out.Choices = slices.Clone(r.Choices)
+	cut := false
+	take := func(s string) string {
+		if len(s) > budget {
+			s, cut = s[:runeStart(s, budget)], true
+		}
+		budget -= len(s)
+		return s
+	}
+	for i := range out.Choices {
+		m := &out.Choices[i].Message
+		m.Content = take(m.Content)
+		m.ToolCalls = slices.Clone(m.ToolCalls)
+		for j := range m.ToolCalls {
+			m.ToolCalls[j].Function.Arguments = take(m.ToolCalls[j].Function.Arguments)
+		}
+	}
+	return &out, cut
+}
+
+func runeStart(s string, n int) int {
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
 }
 
 // finish records the request. It runs last, after the response is written,
@@ -117,7 +187,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 	}
 
 	e := usage.Event{
-		WorkspaceID: key.WorkspaceID, KeyID: key.ID, RouteAlias: o.alias,
+		ID: uuid.NewString(), WorkspaceID: key.WorkspaceID, KeyID: key.ID, RouteAlias: o.alias,
 		Status: o.status, Outcome: outcome, Attempts: o.attempts,
 		LatencyMs: int(elapsed.Milliseconds()), TTFTMs: int(ttft.Milliseconds()),
 		Cached: o.cached, ContextHandoff: o.handoff.Action(), CreatedAt: o.start,
@@ -129,4 +199,22 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 		e.PromptTokens, e.CompletionTokens = cost.usage.PromptTokens, cost.usage.CompletionTokens
 	}
 	d.Usage.Record(e)
+	if o.prompt != nil && d.PromptLog != nil {
+		// Off the handler: net/http finishes the response only when it
+		// returns, so a non-streaming body's tail and a stream's end would
+		// otherwise wait for the redaction.
+		go func() { d.PromptLog.Record(promptLog(e, o)) }()
+	}
+}
+
+func promptLog(e usage.Event, o *observation) store.RequestLog {
+	l := store.RequestLog{
+		ID: e.ID, WorkspaceID: e.WorkspaceID, KeyID: e.KeyID, RouteAlias: e.RouteAlias,
+		Vendor: e.Vendor, Model: e.Model, Status: e.Status, Outcome: e.Outcome, CreatedAt: e.CreatedAt,
+	}
+	l.Request, l.RequestTruncated = promptlog.Prepare(o.prompt)
+	answer, cut := o.response()
+	l.Response, l.ResponseTruncated = promptlog.Prepare(answer)
+	l.ResponseTruncated = l.ResponseTruncated || cut
+	return l
 }
