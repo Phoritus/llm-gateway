@@ -163,7 +163,7 @@ func TestCheckRefusesOnlyASpentBlockingBudget(t *testing.T) {
 	}
 
 	v := l.Check(ctx, []Account{warn, block})
-	if !v.Applies || !v.Known || v.Exceeded != nil || v.Remaining != 0 {
+	if !v.Known || v.Exceeded != nil || v.Remaining != 0 {
 		t.Errorf("verdict = %+v, want admitted with 0 remaining: the spent budget only warns", v)
 	}
 	if err := l.Add(ctx, "ws1", []Account{warn, block}, 1100); err != nil {
@@ -172,7 +172,7 @@ func TestCheckRefusesOnlyASpentBlockingBudget(t *testing.T) {
 	if v := l.Check(ctx, []Account{warn, block}); v.Exceeded == nil || v.Exceeded.Scope != ScopeKey {
 		t.Errorf("verdict = %+v, want refused by the key's budget", v)
 	}
-	if v := l.Check(ctx, []Account{{Scope: ScopeWorkspace, ID: "ws1"}}); v.Applies {
+	if v := l.Check(ctx, []Account{{Scope: ScopeWorkspace, ID: "ws1"}}); v.Known {
 		t.Errorf("verdict without a budget = %+v, want none", v)
 	}
 }
@@ -183,7 +183,7 @@ func TestCheckAdmitsWhenRedisFails(t *testing.T) {
 	t.Cleanup(func() { _ = broken.Close() })
 	l.rdb = broken
 	v := l.Check(context.Background(), []Account{{Scope: ScopeKey, ID: "k1", Limit: &Limit{Action: Block}}})
-	if !v.Applies || v.Known || v.Exceeded != nil {
+	if v.Known || v.Exceeded != nil {
 		t.Errorf("verdict = %+v, want admitted with the spend unknown", v)
 	}
 }

@@ -73,8 +73,6 @@ func reached(spent, limit, pct int64) bool {
 
 // Verdict is what the budgets say about a request before it is routed.
 type Verdict struct {
-	// Applies is set when any account has a budget.
-	Applies bool
 	// Known is set when spend was read; Remaining is then the least left
 	// across the budgets, never below zero.
 	Known     bool
@@ -163,9 +161,9 @@ func (l *Ledger) Check(ctx context.Context, accounts []Account) Verdict {
 	spent, err := l.Spent(ctx, limited)
 	if err != nil {
 		l.logger.WarnContext(ctx, "budget check failed, request admitted", slog.String("error", err.Error()))
-		return Verdict{Applies: true}
+		return Verdict{}
 	}
-	v := Verdict{Applies: true, Known: true, Remaining: -1}
+	v := Verdict{Known: true, Remaining: -1}
 	for i, a := range limited {
 		left := max(0, a.Limit.MicroUSD-spent[i])
 		if v.Remaining < 0 || left < v.Remaining {

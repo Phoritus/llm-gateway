@@ -94,7 +94,7 @@ func budgetServer(t *testing.T, b *fakeBudget, action budget.Action) cacheFixtur
 }
 
 func spentWorkspace(limit store.Budget) budget.Verdict {
-	return budget.Verdict{Applies: true, Known: true, Exceeded: &budget.Account{
+	return budget.Verdict{Known: true, Exceeded: &budget.Account{
 		Scope: budget.ScopeWorkspace, ID: "ws1", Limit: &limit,
 	}}
 }
@@ -150,7 +150,7 @@ func TestACacheHitIsServedPastABlockingBudget(t *testing.T) {
 
 func TestAWarningBudgetServesAndChargesTheAnswer(t *testing.T) {
 	b := pricedBudget(t)
-	b.set(budget.Verdict{Applies: true, Known: true, Remaining: 1_500_000})
+	b.set(budget.Verdict{Known: true, Remaining: 1_500_000})
 	f := budgetServer(t, b, budget.Warn)
 
 	resp := post(t, f.srv, chatBody("echo", false))
@@ -175,7 +175,7 @@ func TestAWarningBudgetServesAndChargesTheAnswer(t *testing.T) {
 }
 
 func TestAnUnpricedAnswerCostsNothingAndSaysSo(t *testing.T) {
-	b := &fakeBudget{verdict: budget.Verdict{Applies: true, Known: true, Remaining: 5_000_000}}
+	b := &fakeBudget{verdict: budget.Verdict{Known: true, Remaining: 5_000_000}}
 	f := budgetServer(t, b, budget.Block)
 
 	resp := post(t, f.srv, chatBody("echo", false))
