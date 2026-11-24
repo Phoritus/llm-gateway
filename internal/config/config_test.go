@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +34,7 @@ func apply(t *testing.T, env map[string]string) {
 	for _, key := range []string{
 		"APP_ENV", "PORT", "ALLOWED_ORIGINS", "PUBLIC_BASE_URL", "TRUSTED_PROXIES",
 		"DATABASE_URL", "DATABASE_URL_LOCAL", "REDIS_URL", "REDIS_URL_LOCAL",
-		"MASTER_KEY", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
+		"MASTER_KEY", "MASTER_KEY_PREVIOUS", "SESSION_SECRET", "SESSION_TTL", "SESSION_IDLE_TTL",
 		"COOKIE_DOMAIN", "MAIL_FROM", "SMTP_URL", "SEMANTIC_CACHE", "VECTOR_REDIS_URL", "VECTOR_REDIS_URL_LOCAL", "CONTEXT_HANDOFF",
 		"VERIFICATION_TTL", "RESET_TTL", "V1_REQUEST_TIMEOUT", "OTEL_EXPORTER_OTLP_ENDPOINT",
 		"V1_KEY_RPM", "V1_KEY_TPM", "V1_WORKSPACE_RPM", "V1_WORKSPACE_TPM", "V1_WORKSPACE_CONCURRENCY",
@@ -159,6 +161,26 @@ func TestLoadRequiresAUsableMasterKey(t *testing.T) {
 				t.Errorf("error does not name MASTER_KEY:\n%v", err)
 			}
 		})
+	}
+}
+
+func TestLoadReadsThePreviousMasterKeys(t *testing.T) {
+	first, second := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	env := productionEnv(t)
+	env["MASTER_KEY_PREVIOUS"] = base64.StdEncoding.EncodeToString(first) + ", " + base64.StdEncoding.EncodeToString(second)
+	apply(t, env)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.PreviousMasterKeys) != 2 || !bytes.Equal(cfg.PreviousMasterKeys[0], first) || !bytes.Equal(cfg.PreviousMasterKeys[1], second) {
+		t.Errorf("PreviousMasterKeys = %d keys, want both, in order", len(cfg.PreviousMasterKeys))
+	}
+
+	env["MASTER_KEY_PREVIOUS"] = base64.StdEncoding.EncodeToString(first) + ",YWJjZGVm"
+	apply(t, env)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MASTER_KEY_PREVIOUS entry 2") {
+		t.Errorf("a short previous key: %v, want it refused by position", err)
 	}
 }
 

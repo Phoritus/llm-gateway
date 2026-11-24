@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -286,5 +287,64 @@ func TestResolveRouteOpensTheChainInOrder(t *testing.T) {
 		if _, err := c.ResolveRoute(ctx, args[0], args[1]); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: err = %v, want ErrNotFound", name, err)
 		}
+	}
+}
+
+func TestResealMovesEveryCredentialToTheCurrentKey(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	oldKey, newKey := []byte("0123456789abcdef0123456789abcdef"), []byte("fedcba9876543210fedcba9876543210")
+	before := newTestCredentials(t, st)
+	ws := signup(t, st, "a@example.com").WorkspaceID
+	var ids []string
+	for i := range 5 {
+		ids = append(ids, mustCreate(t, before, ws, fmt.Sprintf("key %d", i)).ID)
+	}
+	custom, err := before.Create(ctx, ws, NewCredential{Provider: provider.VendorCustom, Name: "c", Secret: testSecret, BaseURL: "https://llm.example.com/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids = append(ids, custom.ID)
+
+	rotated, err := crypto.NewKeyring(newKey, oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := NewCredentials(st, rotated)
+	n, err := after.Reseal(ctx, 2)
+	if err != nil || n != len(ids) {
+		t.Fatalf("Reseal = %d, %v; want %d", n, err, len(ids))
+	}
+	usage, err := after.KeyUsage(ctx)
+	if err != nil || len(usage) != 1 || usage[rotated.Current()] != len(ids) {
+		t.Fatalf("KeyUsage = %v, %v; want every row under the current key", usage, err)
+	}
+	if n, err := after.Reseal(ctx, 2); err != nil || n != 0 {
+		t.Errorf("a second run = %d, %v; want nothing left to do", n, err)
+	}
+
+	newOnly, err := crypto.NewKeyring(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if got, err := NewCredentials(st, newOnly).Unseal(ctx, ws, id); err != nil || got.Secret != testSecret {
+			t.Errorf("credential %s does not open under the new key alone: %v", id, err)
+		}
+	}
+}
+
+func TestResealStopsAtACredentialItCannotOpen(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	ws := signup(t, st, "a@example.com").WorkspaceID
+	mustCreate(t, newTestCredentials(t, st), ws, "x")
+
+	forgetful, err := crypto.NewKeyring([]byte("fedcba9876543210fedcba9876543210"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := NewCredentials(st, forgetful).Reseal(ctx, 10); err == nil || n != 0 {
+		t.Fatalf("Reseal without the old key = %d, %v; want an error", n, err)
 	}
 }

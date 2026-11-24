@@ -42,6 +42,10 @@ run: ## Run the service with .env.dev (or $$ENV_FILE) loaded
 .PHONY: dev
 dev: deps-up run ## Start the dependencies, then the service
 
+.PHONY: rotate-keys
+rotate-keys: ## Re-seal every provider credential under MASTER_KEY (old keys in MASTER_KEY_PREVIOUS)
+	@scripts/run.sh rotate-keys
+
 .PHONY: build
 build: ## Compile the service to bin/gateway
 	$(GO) build -o $(BIN) ./cmd/gateway

@@ -308,3 +308,93 @@ func (c *Credentials) open(ws uuid.UUID, s sealedCredential) (string, error) {
 	}
 	return string(plain), nil
 }
+
+// Reseal re-seals, under the keyring's current key, every credential sealed
+// under an older one, batch rows at a time, each row in a transaction of its
+// own. Stopped part-way, it is run again: it picks up what is left. It returns
+// how many rows it re-sealed. A row it cannot open stops it with the error, so
+// that a key missing from the keyring is noticed rather than skipped.
+func (c *Credentials) Reseal(ctx context.Context, batch int) (int, error) {
+	current := string(c.keys.Current())
+	resealed := 0
+	for {
+		rows, err := c.store.pool.Query(ctx,
+			`SELECT id FROM provider_credentials WHERE key_id <> $1 ORDER BY id LIMIT $2`, current, batch)
+		if err != nil {
+			return resealed, fmt.Errorf("list credentials to re-seal: %w", err)
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			return resealed, fmt.Errorf("list credentials to re-seal: %w", err)
+		}
+		if len(ids) == 0 {
+			return resealed, nil
+		}
+		for _, id := range ids {
+			done, err := c.resealOne(ctx, id, current)
+			if err != nil {
+				return resealed, err
+			}
+			if done {
+				resealed++
+			}
+		}
+	}
+}
+
+func (c *Credentials) resealOne(ctx context.Context, id uuid.UUID, current string) (resealedHere bool, err error) {
+	tx, err := c.store.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin re-seal: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var (
+		ws     uuid.UUID
+		sealed = sealedCredential{id: id}
+	)
+	err = tx.QueryRow(ctx,
+		`SELECT workspace_id, provider, coalesce(base_url, ''), key_id, ciphertext FROM provider_credentials
+		  WHERE id = $1 AND key_id <> $2 FOR UPDATE`, id, current).
+		Scan(&ws, &sealed.vendor, &sealed.baseURL, &sealed.keyID, &sealed.blob)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("select credential %s to re-seal: %w", id, err)
+	}
+	secret, err := c.open(ws, sealed)
+	if err != nil {
+		return false, err
+	}
+	resealed := c.keys.Seal([]byte(secret), credentialAAD(ws, id, sealed.vendor, sealed.baseURL))
+	if _, err := tx.Exec(ctx,
+		`UPDATE provider_credentials SET key_id = $2, ciphertext = $3 WHERE id = $1`,
+		id, string(resealed.KeyID), resealed.Ciphertext); err != nil {
+		return false, fmt.Errorf("re-seal credential %s: %w", id, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit re-seal of %s: %w", id, err)
+	}
+	return true, nil
+}
+
+func (c *Credentials) KeyUsage(ctx context.Context) (map[crypto.KeyID]int, error) {
+	rows, err := c.store.pool.Query(ctx, `SELECT key_id, count(*) FROM provider_credentials GROUP BY key_id`)
+	if err != nil {
+		return nil, fmt.Errorf("count credentials by key: %w", err)
+	}
+	defer rows.Close()
+	usage := map[crypto.KeyID]int{}
+	for rows.Next() {
+		var (
+			id string
+			n  int
+		)
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("count credentials by key: %w", err)
+		}
+		usage[crypto.KeyID(id)] = n
+	}
+	return usage, rows.Err()
+}

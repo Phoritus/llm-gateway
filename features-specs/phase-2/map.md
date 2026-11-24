@@ -27,8 +27,8 @@ because Upstash has no vector sets. That shrinks tickets 10, 12 and 13.
 
 **Next, for an agent, in this order:**
 
-1. **15 to 18**, which need nothing from the owner: master key rotation,
-   the provider key health check, opt-in prompt logging, budgets.
+1. **16 to 18**, which need nothing from the owner: the provider key health
+   check, opt-in prompt logging, budgets.
 
 **Next, for the owner:**
 
@@ -86,7 +86,7 @@ point), `grilling` needs the user's decisions before anything is built,
 | **Gate B** | | | | |
 | [14](issues/14-gate-b.md) | Gate B: go live | task | `ready-for-human` | 05, 07, 09, 10, 12, 13, R16 |
 | **After Gate B** | | | | |
-| [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `ready-for-agent` | - |
+| [15](issues/15-master-key-rotation.md) | Master key rotation job | task | `resolved` | - |
 | [16](issues/16-key-health-check.md) | Periodic provider key health check | task | `ready-for-agent` | - |
 | [17](issues/17-prompt-logging.md) | Opt-in prompt logging, a logs viewer and retention | task | `ready-for-agent` | 04 |
 | [18](issues/18-budgets.md) | Budgets, in money, per workspace and per key | task | `ready-for-agent` | 04 |
