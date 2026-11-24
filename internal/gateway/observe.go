@@ -163,8 +163,9 @@ func runeStart(s string, n int) int {
 }
 
 // finish records the request. It runs last, after the response is written,
-// and nothing in it waits on anything.
-func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
+// and nothing in it waits on anything. requestCtx carries the request id to
+// the work it detaches.
+func (d Deps) finish(requestCtx context.Context, o *observation, key store.ActiveGatewayKey, cost *spent) {
 	vendor, outcome := noVendor, o.outcome
 	if o.answered {
 		vendor = string(o.target.Vendor)
@@ -203,7 +204,7 @@ func (d Deps) finish(o *observation, key store.ActiveGatewayKey, cost *spent) {
 	if cost.usage != nil {
 		e.PromptTokens, e.CompletionTokens = cost.usage.PromptTokens, cost.usage.CompletionTokens
 	}
-	e.CostMicroUSD = d.chargeBudgets(o, key, cost)
+	e.CostMicroUSD = d.chargeBudgets(requestCtx, o, key, cost)
 	d.Usage.Record(e)
 	if o.prompt != nil && d.PromptLog != nil {
 		// Off the handler: net/http finishes the response only when it

@@ -48,7 +48,7 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		key  store.ActiveGatewayKey
 		cost spent
 	)
-	defer func() { d.finish(&obs, key, &cost) }()
+	defer func() { d.finish(r.Context(), &obs, key, &cost) }()
 
 	rc := http.NewResponseController(w)
 	ctx, cancel := context.WithDeadlineCause(r.Context(), deadline, errDeadline)
@@ -137,10 +137,12 @@ func (d Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if cached.key != "" {
 			w.Header().Set("X-Cache", "MISS")
 		}
-		if !d.checkBudget(w, r, obs.budgets) {
+		targets, ok := d.budgetTargets(w, r, obs.budgets, route.Targets)
+		if !ok {
 			obs.status, obs.outcome = http.StatusTooManyRequests, outcomeBudgetExceeded
 			return
 		}
+		route.Targets = targets
 		if route.FreeFirst && d.Quota != nil {
 			route.Targets = d.Quota.Prioritize(ctx, route.Targets, estimate)
 		}

@@ -63,9 +63,12 @@ Built on `feat/budgets`.
   workspace settings) and per gateway key (on `POST /api/gateway-keys` and
   `PUT /api/gateway-keys/{id}/budget`), per UTC calendar month, resetting at
   00:00 UTC on the 1st. Spend lives in Redis per scope and month.
-- **Block** answers 429 `insufficient_quota` / `budget_exceeded` once spent,
-  checked on a cache miss right before routing, so no upstream is called and
-  a cache hit is still served. No `Retry-After`: the wait is weeks, and SDKs
+- **Block**, once spent, leaves a cache miss only the route's free-tier
+  targets (those the free-quota catalog lists; an unpriced target does not
+  count), so a budget of 0 means free tiers only. With none, it answers 429
+  `insufficient_quota` / `budget_exceeded`, checked right before routing, so
+  no upstream is called. A cache hit is still served. A request no budget
+  covers is never checked, so it costs no Redis read. No `Retry-After`: the wait is weeks, and SDKs
   sleep on it. **Warn** keeps serving. Both mail the owner once a month at 80%
   and at 100%.
 - **Visible:** `X-Budget-Remaining-USD` on each request a budget covers; cost

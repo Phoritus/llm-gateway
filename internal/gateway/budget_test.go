@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"llm-gateway/internal/budget"
+	"llm-gateway/internal/provider"
 	"llm-gateway/internal/store"
 )
 
@@ -99,12 +101,20 @@ func spentWorkspace(limit store.Budget) budget.Verdict {
 	}}
 }
 
+// freeModels is a free-quota catalog listing the mock models named.
+type freeModels []string
+
+func (f freeModels) Lists(v provider.Vendor, model string) bool {
+	return v == provider.VendorMock && slices.Contains(f, model)
+}
+
+// A route of a listed and an unpriced target: neither is known to be free.
 func TestASpentBlockingBudgetRefusesBeforeAnyUpstreamCall(t *testing.T) {
 	b := pricedBudget(t)
 	b.set(spentWorkspace(store.Budget{MicroUSD: 5_000_000, Action: budget.Block}))
 	f := budgetServer(t, b, budget.Block)
 
-	resp := post(t, f.srv, chatBody("echo", false))
+	resp := post(t, f.srv, chatBody("echo,unpriced", false))
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", resp.StatusCode)
 	}
@@ -127,6 +137,47 @@ func TestASpentBlockingBudgetRefusesBeforeAnyUpstreamCall(t *testing.T) {
 	e := recordedEvents(t, f.usage, 1)[0]
 	if e.Status != http.StatusTooManyRequests || e.Outcome != outcomeBudgetExceeded || e.CostMicroUSD == nil || *e.CostMicroUSD != 0 {
 		t.Errorf("event = %+v, want a refused request that cost nothing", e)
+	}
+}
+
+func TestASpentBlockingBudgetStillRoutesToFreeTargets(t *testing.T) {
+	b := pricedBudget(t)
+	b.Free = freeModels{"gratis"}
+	b.set(spentWorkspace(store.Budget{MicroUSD: 0, Action: budget.Block}))
+	f := budgetServer(t, b, budget.Block)
+
+	resp := post(t, f.srv, chatBody("echo,gratis", false))
+	drain(resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 from the free target", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Budget-Cost-Basis"); got != "free" {
+		t.Errorf("X-Budget-Cost-Basis = %q, want free", got)
+	}
+	f.calls.mu.Lock()
+	defer f.calls.mu.Unlock()
+	if !slices.Equal(f.calls.models, []string{"gratis"}) {
+		t.Errorf("upstream calls = %v, want only the free target", f.calls.models)
+	}
+}
+
+// checkless fails the test if a budget is checked.
+type checkless struct {
+	fakeBudget
+	t *testing.T
+}
+
+func (c *checkless) Check(context.Context, []budget.Account) budget.Verdict {
+	c.t.Error("Check was called with no budget set")
+	return budget.Verdict{}
+}
+
+func TestWithoutABudgetNothingIsChecked(t *testing.T) {
+	f := cacheServer(t, store.CacheAuto, func(d *Deps) { d.Budget = &checkless{t: t} })
+	resp := post(t, f.srv, chatBody("echo", false))
+	drain(resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
 

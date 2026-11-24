@@ -205,8 +205,5 @@ point), `grilling` needs the user's decisions before anything is built,
   cannot tell a free key from a paid one (from ticket 18).
 - Mistral has no price rows: its pricing page names models without the API
   ids a route uses (from ticket 18).
-- A blocking budget of 0 refuses every request that would call an upstream,
-  free-tier targets included, since the check runs before routing. Letting a
-  spent budget still route to free targets is possible later (from ticket 18).
 - `ratelimit.Take` could return what it actually spent, so `gateway.reserve`
   stops re-deriving the burst clamp (from R23's review).

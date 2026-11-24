@@ -19,6 +19,10 @@
 // custom endpoint or a model newer than the table keeps working. A model in
 // the free-quota catalog costs nothing (Free), and so does a cache hit
 // (Cached).
+//
+// A spent blocking budget still lets a request through to the free targets
+// of its route, so a budget of 0 means free tiers only. An unpriced target is
+// not one of them: its cost is unknown, not zero.
 package budget
 
 // Budgets is everything the data plane asks of budgets.

@@ -9,6 +9,7 @@ import (
 
 	"llm-gateway/internal/budget"
 	"llm-gateway/internal/store"
+	"llm-gateway/internal/telemetry"
 )
 
 // Budget checks a request against its workspace's and key's monthly budgets,
@@ -42,19 +43,29 @@ func anyBudget(accounts []budget.Account) bool {
 	return false
 }
 
-// checkBudget refuses a request a spent blocking budget covers, writing the
-// 429, and otherwise reports what is left. It runs only when the request is
-// about to call an upstream, so a cache hit is served past any budget.
-func (d Deps) checkBudget(w http.ResponseWriter, r *http.Request, accounts []budget.Account) bool {
-	if d.Budget == nil {
-		return true
+// budgetTargets returns the targets a cache miss may call. A spent blocking
+// budget leaves only the free-tier ones, so a budget of 0 means free tiers
+// only; with none of those it writes the 429 and returns false. An unpriced
+// target does not count as free, since its cost is unknown.
+func (d Deps) budgetTargets(w http.ResponseWriter, r *http.Request, accounts []budget.Account, targets []store.ResolvedTarget) ([]store.ResolvedTarget, bool) {
+	if d.Budget == nil || !anyBudget(accounts) {
+		return targets, true
 	}
 	v := d.Budget.Check(r.Context(), accounts)
 	if v.Known {
 		w.Header().Set("X-Budget-Remaining-USD", usd(v.Remaining))
 	}
 	if v.Exceeded == nil {
-		return true
+		return targets, true
+	}
+	var free []store.ResolvedTarget
+	for _, t := range targets {
+		if d.Budget.Charge(t, 0, 0).Basis == budget.Free {
+			free = append(free, t)
+		}
+	}
+	if len(free) > 0 {
+		return free, true
 	}
 	whose := "This workspace's"
 	if v.Exceeded.Scope == budget.ScopeKey {
@@ -65,7 +76,7 @@ func (d Deps) checkBudget(w http.ResponseWriter, r *http.Request, accounts []bud
 	writeError(w, http.StatusTooManyRequests, typeInsufficientQuota, "budget_exceeded",
 		whose+" monthly budget of "+budget.USD(v.Exceeded.Limit.MicroUSD)+" is spent. "+
 			"It resets on "+resets+" at 00:00 UTC, or can be raised in the dashboard.")
-	return false
+	return nil, false
 }
 
 func usd(micros int64) string {
@@ -75,7 +86,7 @@ func usd(micros int64) string {
 // chargeBudgets prices a finished request and counts it against its budgets,
 // detached like the reconcile. The result is the usage event's cost: nil when
 // the answer could not be priced.
-func (d Deps) chargeBudgets(o *observation, key store.ActiveGatewayKey, s *spent) *int64 {
+func (d Deps) chargeBudgets(ctx context.Context, o *observation, key store.ActiveGatewayKey, s *spent) *int64 {
 	var zero int64
 	switch {
 	case !o.answered || o.cached:
@@ -92,10 +103,12 @@ func (d Deps) chargeBudgets(o *observation, key store.ActiveGatewayKey, s *spent
 	c := d.Budget.Charge(o.target, prompt, completion)
 	if c.MicroUSD > 0 {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 			defer cancel()
 			if err := d.Budget.Add(ctx, key.WorkspaceID, o.budgets, c.MicroUSD); err != nil {
-				d.logger().WarnContext(ctx, "budget spend not counted", slog.String("error", err.Error()))
+				d.logger().WarnContext(ctx, "budget spend not counted",
+					slog.String("request_id", telemetry.RequestIDFrom(ctx)),
+					slog.String("error", err.Error()))
 			}
 		}()
 	}
