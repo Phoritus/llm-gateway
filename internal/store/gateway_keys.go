@@ -20,25 +20,34 @@ type GatewayKey struct {
 	LastUsedAt  *time.Time
 	RevokedAt   *time.Time
 	CreatedAt   time.Time
+	Budget      *Budget
 }
 
 type NewGatewayKey struct {
 	Name   string
 	Prefix string
 	Hash   []byte
+	Budget *Budget
 }
 
 type ActiveGatewayKey struct {
 	ID            string
 	WorkspaceID   string
 	OwnerVerified bool
+	// Budget rides on the key so that Authenticate's cache carries it.
+	Budget *Budget
 }
 
-const gatewayKeyColumns = `id, workspace_id, name, prefix, last_used_at, revoked_at, created_at`
+const gatewayKeyColumns = `id, workspace_id, name, prefix, last_used_at, revoked_at, created_at, budget_micro_usd, budget_action`
 
 func scanGatewayKey(row pgx.Row) (GatewayKey, error) {
-	var k GatewayKey
-	err := row.Scan(&k.ID, &k.WorkspaceID, &k.Name, &k.Prefix, &k.LastUsedAt, &k.RevokedAt, &k.CreatedAt)
+	var (
+		k      GatewayKey
+		amount *int64
+		action *string
+	)
+	err := row.Scan(&k.ID, &k.WorkspaceID, &k.Name, &k.Prefix, &k.LastUsedAt, &k.RevokedAt, &k.CreatedAt, &amount, &action)
+	k.Budget = budgetOf(amount, action)
 	return k, err
 }
 
@@ -55,12 +64,13 @@ func (s *Store) CreateGatewayKey(ctx context.Context, workspaceID string, in New
 		return nil, err
 	}
 
+	amount, action := budgetColumns(in.Budget)
 	k, err := scanGatewayKey(tx.QueryRow(ctx,
-		`INSERT INTO gateway_keys (id, workspace_id, name, prefix, hash)
-		 SELECT $1, $2, $3, $4, $5
+		`INSERT INTO gateway_keys (id, workspace_id, name, prefix, hash, budget_micro_usd, budget_action)
+		 SELECT $1, $2, $3, $4, $5, $7, $8
 		  WHERE (SELECT count(*) FROM gateway_keys WHERE workspace_id = $2 AND revoked_at IS NULL) < $6
 		 RETURNING `+gatewayKeyColumns,
-		uuid.NewString(), workspaceID, in.Name, in.Prefix, in.Hash, maxActiveGatewayKeysPerWorkspace))
+		uuid.NewString(), workspaceID, in.Name, in.Prefix, in.Hash, maxActiveGatewayKeysPerWorkspace, amount, action))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrLimitReached
 	}
@@ -124,14 +134,19 @@ func (s *Store) RevokeGatewayKey(ctx context.Context, workspaceID, id string) ([
 // ActiveGatewayKeyByHash resolves a presented key's hash, or returns
 // ErrNotFound when it is unknown or revoked.
 func (s *Store) ActiveGatewayKeyByHash(ctx context.Context, hash []byte) (*ActiveGatewayKey, error) {
-	var k ActiveGatewayKey
+	var (
+		k      ActiveGatewayKey
+		amount *int64
+		action *string
+	)
 	err := s.pool.QueryRow(ctx,
-		`SELECT k.id, k.workspace_id, u.email_verified_at IS NOT NULL
+		`SELECT k.id, k.workspace_id, u.email_verified_at IS NOT NULL, k.budget_micro_usd, k.budget_action
 		   FROM gateway_keys k
 		   JOIN workspaces w ON w.id = k.workspace_id
 		   JOIN users u ON u.id = w.owner_id
 		  WHERE k.hash = $1 AND k.revoked_at IS NULL`,
-		hash).Scan(&k.ID, &k.WorkspaceID, &k.OwnerVerified)
+		hash).Scan(&k.ID, &k.WorkspaceID, &k.OwnerVerified, &amount, &action)
+	k.Budget = budgetOf(amount, action)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

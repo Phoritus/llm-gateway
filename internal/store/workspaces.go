@@ -62,6 +62,8 @@ type WorkspaceSettings struct {
 	// PromptLogRetentionDays is how long a stored log is kept; zero is
 	// DefaultPromptLogRetentionDays.
 	PromptLogRetentionDays int `json:"prompt_log_retention_days,omitempty"`
+	// Budget caps the workspace's monthly spend. Nil is no cap.
+	Budget *Budget `json:"budget,omitempty"`
 }
 
 // DefaultPromptLogRetentionDays is the retention of a workspace that set none.
