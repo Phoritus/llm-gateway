@@ -3,6 +3,7 @@ package budget
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -12,15 +13,26 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"llm-gateway/internal/auth"
+	"llm-gateway/internal/store"
 )
 
 type mailbox struct {
 	mu   sync.Mutex
 	sent []auth.Message
 	fail bool
+	// hang makes Send wait until its context ends, as a relay that never
+	// answers does.
+	hang bool
 }
 
-func (m *mailbox) Send(_ context.Context, msg auth.Message) error {
+func (m *mailbox) Send(ctx context.Context, msg auth.Message) error {
+	m.mu.Lock()
+	hang := m.hang
+	m.mu.Unlock()
+	if hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.fail {
@@ -185,5 +197,85 @@ func TestCheckAdmitsWhenRedisFails(t *testing.T) {
 	v := l.Check(context.Background(), []Account{{Scope: ScopeKey, ID: "k1", Limit: &Limit{Action: Block}}})
 	if v.Known || v.Exceeded != nil {
 		t.Errorf("verdict = %+v, want admitted with the spend unknown", v)
+	}
+}
+
+func TestAMailThatTimesOutIsTriedAgainOnTheNextAdd(t *testing.T) {
+	l, mail := testLedger(t)
+	defer func(d time.Duration) { mailTimeout = d }(mailTimeout)
+	mailTimeout = 50 * time.Millisecond
+	ctx := context.Background()
+	ws := Account{Scope: ScopeWorkspace, ID: "ws1", Limit: &Limit{MicroUSD: 100, Action: Warn}}
+	mail.hang = true
+	if err := l.Add(ctx, "ws1", []Account{ws}, 90); err != nil {
+		t.Fatal(err)
+	}
+	mark := l.mailKey(ws, "2026-11", 80)
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		n, err := l.rdb.Exists(ctx, mark).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the mark of a mail that timed out was never cleared, so this month's mail is lost")
+		}
+	}
+}
+
+// hungRedis accepts connections and never answers on them.
+func hungRedis(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	return ln.Addr().String()
+}
+
+func TestCheckDoesNotWaitOnAHungRedis(t *testing.T) {
+	opts, err := store.RedisOptions("redis://" + hungRedis(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(opts)
+	t.Cleanup(func() { _ = rdb.Close() })
+	l := NewLedger(rdb, &mailbox{}, owner{}, nil)
+	accounts := []Account{{Scope: ScopeKey, ID: "k1", Limit: &Limit{Action: Block}}}
+
+	start := time.Now()
+	if v := l.Check(context.Background(), accounts); v.Known || v.Exceeded != nil {
+		t.Errorf("verdict = %+v, want admitted with the spend unknown", v)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the first check took %s, want it bounded well under a second", took)
+	}
+	start = time.Now()
+	l.Check(context.Background(), accounts)
+	if took := time.Since(start); took > 50*time.Millisecond {
+		t.Errorf("a check right after a failure took %s, want it to skip Redis", took)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -97,6 +98,9 @@ type Ledger struct {
 	// prefix namespaces the keys, so tests can keep to their own.
 	prefix string
 	now    func() time.Time
+	// retryAt is when Check may read Redis again after it failed, in unix
+	// nanoseconds.
+	retryAt atomic.Int64
 }
 
 // NewLedger builds a Ledger. A nil logger is slog.Default().
@@ -145,6 +149,15 @@ func (l *Ledger) Spent(ctx context.Context, accounts []Account) ([]int64, error)
 	return out, nil
 }
 
+const (
+	// checkTimeout bounds the read Check makes. A slow counter is treated as
+	// one that is down: the request should not wait on it.
+	checkTimeout = 250 * time.Millisecond
+	// checkCoolOff is how long Check admits without reading after a failed
+	// read, so an outage does not add checkTimeout to every request.
+	checkCoolOff = 5 * time.Second
+)
+
 // Check reads the spend of the accounts with a budget. A Redis error admits
 // the request: a budget guards the workspace's own money, as the /v1 rate
 // limits do, and an outage of the counter should not take the gateway down.
@@ -158,8 +171,16 @@ func (l *Ledger) Check(ctx context.Context, accounts []Account) Verdict {
 	if len(limited) == 0 {
 		return Verdict{}
 	}
-	spent, err := l.Spent(ctx, limited)
+	if time.Now().UnixNano() < l.retryAt.Load() {
+		return Verdict{}
+	}
+	readCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	spent, err := l.Spent(readCtx, limited)
+	cancel()
 	if err != nil {
+		if ctx.Err() == nil {
+			l.retryAt.Store(time.Now().Add(checkCoolOff).UnixNano())
+		}
 		l.logger.WarnContext(ctx, "budget check failed, request admitted", slog.String("error", err.Error()))
 		return Verdict{}
 	}
@@ -176,8 +197,12 @@ func (l *Ledger) Check(ctx context.Context, accounts []Account) Verdict {
 	return v
 }
 
-// mailTimeout bounds one budget mail, sent after the request is long done.
-const mailTimeout = 30 * time.Second
+// mailTimeout bounds one budget mail, sent after the request is long done. A
+// variable so a test can shorten it.
+var mailTimeout = 30 * time.Second
+
+// markTimeout bounds clearing the mark of a mail that was not sent.
+const markTimeout = 2 * time.Second
 
 // Add counts micros against every account this period, then mails the owner
 // for each threshold a budget has reached, once per threshold and period
@@ -232,9 +257,13 @@ func (l *Ledger) mail(workspaceID string, a Account, p Period, pct, spent int64,
 	if err == nil {
 		return
 	}
-	l.logger.WarnContext(ctx, "budget mail not sent", slog.String("error", err.Error()))
-	if err := l.rdb.Del(ctx, mark).Err(); err != nil {
-		l.logger.WarnContext(ctx, "budget mail mark not cleared", slog.String("error", err.Error()))
+	l.logger.Warn("budget mail not sent", slog.String("error", err.Error()))
+	// The send may have used up ctx, so the mark gets a context of its own:
+	// a mark left behind loses this month's mail.
+	delCtx, cancelDel := context.WithTimeout(context.Background(), markTimeout)
+	defer cancelDel()
+	if err := l.rdb.Del(delCtx, mark).Err(); err != nil {
+		l.logger.Warn("budget mail mark not cleared", slog.String("error", err.Error()))
 	}
 }
 
